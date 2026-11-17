@@ -17,6 +17,11 @@ account-to-JSON pipeline for 1,000- and 100,000-transaction submissions. See the
 [performance and packing-quality report](docs/performance.md) for results and
 remaining limits.
 
+See the [requirements review](docs/requirements-review.md) for implementation
+evidence and the open minimum-batch-count requirement. The
+[demonstration guide](docs/demonstration-guide.md) provides a build/run sequence,
+IDE settings and a code walkthrough.
+
 ## Package organization
 
 All application packages sit beneath `com.example.financial_account_balance_tracker`:

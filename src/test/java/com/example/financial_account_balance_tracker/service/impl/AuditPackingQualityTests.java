@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.SplittableRandom;
 import java.util.UUID;
@@ -56,6 +57,33 @@ class AuditPackingQualityTests {
             assertThat(!result.optimalityProven() || result.batches().size() == minimum)
                     .as("Optimality claim for sample %s", sample).isTrue();
         }
+    }
+
+    @Test
+    void exposesTheKnownCostGapInAValidOneThousandTransactionWindow() {
+        long[] pennies = new long[1000];
+        Arrays.fill(pennies, 0, 994, 50000000);
+        long[] remainder = {44000000, 25000000, 20000000, 39000000, 34000000, 27000000};
+        System.arraycopy(remainder, 0, pennies, 994, remainder.length);
+        AuditSubmission input = submission(pennies);
+        var result = service.pack(input);
+
+        // 497 full pairs plus two feasible remainder batches attain the volume bound.
+        List<AuditBatch> knownOptimal = new ArrayList<>();
+        List<Transaction> transactions = input.transactions();
+        for (int i = 0; i < 994; i += 2) {
+            knownOptimal.add(new AuditBatch(List.of(transactions.get(i), transactions.get(i + 1))));
+        }
+        knownOptimal.add(new AuditBatch(List.of(transactions.get(994), transactions.get(998), transactions.get(996))));
+        knownOptimal.add(new AuditBatch(List.of(transactions.get(997), transactions.get(999), transactions.get(995))));
+
+        assertThat(knownOptimal).hasSize(499);
+        List<Transaction> assigned = knownOptimal.stream().flatMap(batch -> batch.transactions().stream()).toList();
+        assertThat(assigned).hasSize(1000);
+        assertThat(new HashSet<>(assigned).equals(new HashSet<>(transactions))).isTrue();
+        assertThat(result.batchCountLowerBound()).isEqualTo(499);
+        assertThat(result.batches()).hasSize(500);
+        assertThat(result.optimalityProven()).isFalse();
     }
 
     private static Stream<Arguments> knownOptima() {
