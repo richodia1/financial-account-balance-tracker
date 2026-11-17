@@ -90,6 +90,29 @@ class AuditPackingQualityTests {
                 Arguments.of(new long[] {49, 41, 40, 35, 25, 10}, 2));
     }
 
+    @Test
+    void boundedFeasibilitySearchAgreesWithTheSeparateExactOracleOnSmallInputs() {
+        SplittableRandom random = new SplittableRandom(447213);
+        BoundedBatchRepacker repacker = new BoundedBatchRepacker();
+        for (int sample = 0; sample < 32; sample++) {
+            long[] pennies = new long[6 + random.nextInt(5)];
+            for (int item = 0; item < pennies.length; item++) {
+                pennies[item] = random.nextLong(20000, 50000001);
+            }
+            int minimum = exactMinimum(pennies);
+            AuditSubmission input = submission(pennies);
+            var packing = repacker.repack(input.transactions(), minimum).orElseThrow();
+
+            assertThat(packing).hasSize(minimum);
+            List<Transaction> assigned = packing.stream().flatMap(batch -> batch.transactions().stream()).toList();
+            assertThat(assigned).hasSize(input.transactions().size());
+            assertThat(new HashSet<>(assigned).equals(new HashSet<>(input.transactions()))).isTrue();
+            if (minimum > 1) {
+                assertThat(repacker.repack(input.transactions(), minimum - 1)).isEmpty();
+            }
+        }
+    }
+
     /**
      * Exhaustive bin assignments, independent of the production subset solver.
      * Symmetric equal-load bins are interchangeable. Sorting only prunes search;

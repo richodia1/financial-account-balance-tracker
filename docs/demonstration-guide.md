@@ -72,7 +72,7 @@ audit capacity. Credits do not cancel debits for packing.
 A true optimality flag means the batch count reaches a valid lower bound. A false
 flag means the current result is unproven; it can represent either a suboptimal
 packing or a weak bound. The [cost-minimisation review](requirements-review.md#cost-minimisation-status)
-shows the repaired 500-to-499 case and a remaining bounded-search limitation.
+shows the repaired 500-to-499 and 490-to-489 cases and the remaining search limits.
 
 ## 4. Show a deterministic starting balance
 
@@ -107,6 +107,7 @@ All packages below sit under `com.example.financial_account_balance_tracker`.
 | `service.impl.BestFitDecreasingAuditBatchingService` | Sorts magnitudes largest first; a capacity-indexed tree finds the tightest existing fit. A deque preserves batches with equal remaining capacity. |
 | `service.impl.OptimizingAuditBatchingService` | Keeps an already proven initial result, solves small submissions exactly and attempts bounded local repair on larger submissions. |
 | `service.impl.SmallSetExactBatchPacker` | Reconstructs an exact packing for at most 18 transactions using subset states and parent choices. |
+| `service.impl.BoundedBatchRepacker` | Tries a one-batch reduction for up to 128 individual transactions, using backtracking with equal-load symmetry pruning and a fixed node budget. |
 | `model.AuditBatch` and `model.AuditBatchingResult` | Retain immutable assignments, validate capacity and expose the lower-bound result. |
 | `audit.JsonAuditSubmissionHandler` and audit DTOs | Map batches to the output shape and serialize one JSON document per submission. |
 
@@ -122,9 +123,11 @@ Keep these explanations precise:
   still costs O(N) at the window boundary while the account operation is active.
 - **Packing:** all mutable packing state is local to one call. Sorting and the
   balanced tree give O(N log N) time and O(N) additional space for the initial
-  stage. Exact repair adds O(K * 2^K) work with K at most 18 and at most two local
-  passes. A local optimum does not prove a global optimum; larger windows remain
-  heuristic when the global lower bound is not reached.
+  stage. Repair uses exact subsets for at most 18 items or bounded backtracking
+  for up to 128, with a 100,000-node budget per attempt and two local passes.
+  An exhausted search retains the existing valid packing. A local solution does
+  not prove a global optimum; larger windows remain heuristic when the global
+  lower bound is not reached.
 - **Failure:** a full queue rejects the completing transaction before the balance
   commit. A handler failure retains work in memory, with no automatic retry or
   durable recovery.
