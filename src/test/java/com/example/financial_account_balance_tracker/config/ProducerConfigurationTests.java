@@ -16,7 +16,7 @@ class ProducerConfigurationTests {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(ProducerConfiguration.class)
-            .withBean(BankAccountService.class, InMemoryBankAccountService::new);
+            .withBean(BankAccountService.class, () -> new InMemoryBankAccountService(transaction -> {}));
 
     @Test
     void canDisableAutomaticGeneration() {

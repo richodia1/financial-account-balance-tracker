@@ -1,0 +1,8 @@
+java.version=21.0.10
+os.name=Mac OS X
+os.arch=x86_64
+available.processors=8
+max.heap.mib=512
+seed=62831
+warmups.per.case=3
+measured.iterations.per.case=7

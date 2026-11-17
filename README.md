@@ -7,8 +7,15 @@ transaction audit batches.
 
 The application builds, tests and starts as an HTTP service. It implements an
 immutable transaction model, a thread-safe in-memory balance service and a REST
-balance endpoint. Dedicated credit and debit producers run automatically. Audit
-batching is the next stage; processed transactions are not yet retained for audit.
+balance endpoint. Dedicated credit and debit producers run automatically. Accepted
+transactions are collected into complete audit windows and handed to a dedicated
+worker. The worker packs those transactions into batches capped at GBP 1,000,000
+of absolute value and prints a JSON summary. Packing uses best-fit decreasing,
+with a lower-bound diagnostic that distinguishes proven optimal results from
+heuristic results. An opt-in performance demonstration measures packing and the
+account-to-JSON pipeline for 1,000- and 100,000-transaction submissions. See the
+[performance and packing-quality report](docs/performance.md) for results and
+remaining limits.
 
 ## Package organization
 
@@ -16,35 +23,51 @@ All application packages sit beneath `com.example.financial_account_balance_trac
 
 ```text
 FinancialAccountBalanceTrackerApplication.java
+audit/
+    AsyncAuditDispatcher.java
+    AuditSubmissionHandler.java
+    JsonAuditSubmissionHandler.java
 config/
+    AuditConfiguration.java
     ProducerConfiguration.java
 controller/
     BalanceController.java
 dto/
+    AuditBatchSummary.java
+    AuditSubmissionOutput.java
+    AuditSubmissionSummary.java
     BalanceResponse.java
 enums/
     TransactionType.java
 model/
+    AuditBatch.java
+    AuditBatchingResult.java
+    AuditSubmission.java
     Transaction.java
 producer/
     RandomTransactionFactory.java
     TransactionProducer.java
 service/
+    AuditBatchingService.java
     BankAccountService.java
+    TransactionAuditService.java
     impl/
+        BestFitDecreasingAuditBatchingService.java
         InMemoryBankAccountService.java
+        InMemoryTransactionAuditService.java
 ```
 
 | Package | Responsibility |
 | --- | --- |
-| `config` | Component wiring and conditional activation of the producers. |
+| `audit` | Bounded hand-off, background processing and console JSON output. |
+| `config` | Component wiring, producer activation and audit window/queue configuration. |
 | `controller` | HTTP routing, response status, headers and response assembly. |
-| `dto` | Data transferred across the HTTP boundary. |
+| `dto` | Data transferred across the HTTP and console output boundaries. |
 | `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
 | `model` | Internal business data and its invariants, including valid signed amounts. |
 | `producer` | Random transaction creation, scheduling and worker lifecycle. |
-| `service` | The account-processing and balance-enquiry contract. |
-| `service.impl` | The in-memory implementation, exact arithmetic and synchronization. |
+| `service` | Contracts for account processing, audit collection and batch packing. |
+| `service.impl` | In-memory balance/collection and the batch-packing algorithm. |
 
 Tests mirror these packages under `src/test/java`. See the
 [design walkthrough](docs/design.md) for the request flow, transaction flow and
@@ -69,6 +92,9 @@ the reasoning behind the boundaries.
 - Balance updates and exact reads synchronize on the same service instance.
   Each operation takes effect atomically, with updates visible to subsequent
   readers. The framework creates one service instance by default.
+- Processing prepares the next balance, records the transaction for audit, then
+  commits that balance. A rejected completed-window hand-off leaves the balance
+  and the existing partial audit window unchanged.
 - Debits may take the balance below zero. No overdraft restriction is applied.
   Each processing call applies its transaction; IDs are not deduplication keys.
 - The producer enforces the GBP 200 to GBP 500,000 generation range. The
@@ -119,6 +145,39 @@ Producer tests cover inclusive amount boundaries, signed generation, the 40 ms
 scheduling period, dedicated worker threads, shutdown and failure handling.
 Configuration tests cover enabled and disabled generation. Balance API tests
 disable automatic generation so their account state stays deterministic.
+Audit tests cover the 999/1000/1001 boundaries, immutable snapshots, ordered
+windows, rejected hand-offs, bounded queues and worker failure retention. The
+concurrent account test verifies that all 8,000 accepted transactions appear
+exactly once across eight submissions. A functional test also collects a
+100,000-transaction window. A configured integration test verifies that a slow
+audit handler does not block account processing or balance enquiries.
+Packing tests verify absolute-value limits, exact-capacity and one-penny-over
+boundaries, repeated transaction occurrences, deterministic ordering, lower
+bounds and known heuristic limitations. Seeded 1,000- and 100,000-transaction
+inputs verify that each transaction and the exact absolute total are preserved.
+Output tests parse the JSON document and exercise console-write failure handling;
+a configuration test runs the default collection-to-JSON pipeline.
+Additional quality tests compare small inputs against an independent exact
+subset solver, checking lower bounds and optimality claims.
+
+### Run the performance demonstration
+
+With JDK 21 selected, run this separately from the normal test suite:
+
+```sh
+./mvnw -Dtest=AuditPerformanceScenario '-DargLine=-Xms256m -Xmx512m' test
+```
+
+It uses three warmup iterations and seven measured iterations per scenario and
+size. Timing results are written to `target/audit-performance.csv`; environment
+details are written to `target/audit-performance-environment.txt`. You can also
+run the scenario's test method directly in the IDE.
+
+The scenario class intentionally does not match the default test naming pattern,
+so ordinary `./mvnw clean verify` runs correctness tests without collecting timing
+samples. No latency threshold is enforced. See the
+[methodology and recorded results](docs/performance.md) before interpreting the
+measurements; JSON payload output to a terminal and producer pacing are excluded.
 
 ## Run
 
@@ -176,6 +235,92 @@ java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar --tracker.
 | --- | --- | --- |
 | `server.port` | `8081` | HTTP listener port. |
 | `tracker.producer.enabled` | `true` | Automatically create and start both producers. |
+| `tracker.audit.submission-size` | `1000` | Transactions per complete audit window; use `100000` for the larger-window scenario. |
+| `tracker.audit.queue-capacity` | `4` | Maximum completed submissions waiting for the audit worker. |
+
+## Audit collection
+
+Every 1,000 accepted transactions form one immutable `AuditSubmission`. Windows
+are disjoint and preserve processing order. At 999 transactions there is no
+complete submission; transaction 1,000 completes the first window, and transaction
+1,001 starts the next one. An incomplete window is never emitted on shutdown.
+
+`InMemoryTransactionAuditService` captures a complete window and hands it to
+`AsyncAuditDispatcher`. The hand-off uses a bounded queue's `offer` operation:
+it does not wait for queue capacity or downstream processing. Snapshot creation
+still takes O(N) time at the window boundary. The audit handler runs on the
+separate `audit-dispatcher` thread, outside the account's balance lock.
+
+If the queue is full, the completing transaction is rejected before its balance
+change is committed, and the partial window is preserved for a possible retry.
+The producers' processing-failure policy then stops both generators. A handler
+failure retains its in-flight submission and the queued submissions in memory;
+new complete windows are rejected, with no automatic downstream retry.
+
+The dispatcher starts before the producers and stops after them. Normal shutdown
+drains completed submissions. Its memory use is bounded by the partial window,
+four queued windows by default, and one in-flight window. All of this state is
+in memory and is lost on application restart.
+
+## Audit batches and console output
+
+`JsonAuditSubmissionHandler` processes each complete window on the audit worker.
+Every transaction goes into exactly one batch within its own submission.
+Transactions may be reordered for packing; the source window remains unchanged.
+The total of **absolute** amounts in each batch cannot exceed GBP 1,000,000.00.
+For example, GBP 500,000 credit plus GBP 500,000 debit fills a batch; it does not
+have zero audit value. The immutable `AuditBatch` model also enforces the limit.
+An individual amount above the capacity cannot be packed and causes a retained
+handler failure. The normal producers never generate such an amount.
+
+At the target generation rate, the first JSON line appears after roughly
+20 seconds, with another after each complete 1,000-transaction window. Each line
+is one valid JSON document with numeric totals in pounds and transaction counts.
+For illustration, 1,000 transactions of magnitude GBP 2,000 produce:
+
+```json
+{"submission":{"batches":[{"totalValueOfAllTransactions":1000000.00,"countOfTransactions":500},{"totalValueOfAllTransactions":1000000.00,"countOfTransactions":500}]}}
+```
+
+Normal application logs accompany the JSON lines. A separate diagnostic records
+the submission sequence, transaction count, batch count, lower bound and whether
+optimality has been proven. It does not add fields to the JSON contract.
+A console-write error fails the handler and retains the submission; a partial
+console write cannot be rolled back and there is no automatic retry.
+
+### Batch-count minimization
+
+`BestFitDecreasingAuditBatchingService` sorts by descending absolute amount, then
+puts each transaction into the tightest existing batch that can hold it. It opens
+a new batch only when none fits. A `TreeMap` indexes remaining capacities and a
+deque retains every batch when several have the same capacity. Stable sorting and
+FIFO tie-breaking give repeatable results for the same input.
+
+Amounts are converted to exact integer pennies for capacity decisions. A balanced
+tree avoids scanning every batch for each item: packing takes O(N log N) time and
+O(N) additional memory, including the sorted view and retained assignments.
+
+This is a scalable minimization **heuristic**, not an exact optimizer. Its
+`AuditBatchingResult` reports the greater of two valid lower bounds:
+
+- `ceil(sum(abs(amount)) / 1,000,000)`.
+- The number of transactions individually larger than half the batch capacity,
+  because no two of those transactions can share a batch.
+
+When the resulting batch count equals that bound, the result is provably optimal.
+A larger count means optimality is unproven; the bound itself can be weak.
+For example, magnitudes `[440000, 250000, 200000, 390000, 340000, 270000]`
+produce three batches with this heuristic, although two are possible:
+`[440000, 340000, 200000]` and `[390000, 270000, 250000]`. A regression test keeps
+this limitation explicit rather than claiming a guaranteed minimum. Five amounts
+of GBP 340,000 also produce three batches against a volume bound of two, but
+three really are necessary in that case.
+
+The algorithm targets fast, low-cost packing for large windows. If a guaranteed
+minimum for every input is mandatory, this implementation needs an exact
+optimization strategy with separately assessed runtime and dependency costs.
+See the [optimization formulation](https://www.scipopt.org/scip/doc/html/BINPACKING_PROBLEM.php)
+and the [heuristic/optimization discussion](https://scipbook.readthedocs.io/en/latest/bpp.html).
 
 ## Balance API
 
@@ -229,3 +374,4 @@ Reference documentation:
 - [Synchronization and memory visibility](https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html#jls-17.4.5)
 - [Periodic scheduling](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html)
 - [Application lifecycle](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/context/SmartLifecycle.html)
+- [Bounded queue hand-off](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/BlockingQueue.html)

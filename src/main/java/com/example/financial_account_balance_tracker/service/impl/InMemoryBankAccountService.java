@@ -2,6 +2,7 @@ package com.example.financial_account_balance_tracker.service.impl;
 
 import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
+import com.example.financial_account_balance_tracker.service.TransactionAuditService;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -14,12 +15,19 @@ import java.util.Objects;
 @Service
 public final class InMemoryBankAccountService implements BankAccountService {
 
+    private final TransactionAuditService auditService;
     private BigDecimal balance = new BigDecimal("0.00");
+
+    public InMemoryBankAccountService(TransactionAuditService auditService) {
+        this.auditService = Objects.requireNonNull(auditService);
+    }
 
     @Override
     public synchronized void processTransaction(Transaction transaction) {
         Objects.requireNonNull(transaction, "Transaction must not be null");
-        balance = balance.add(transaction.amount());
+        BigDecimal nextBalance = balance.add(transaction.amount());
+        auditService.record(transaction);
+        balance = nextBalance;
     }
 
     @Override
