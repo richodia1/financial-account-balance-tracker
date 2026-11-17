@@ -6,6 +6,12 @@ target/
 
 ### STS ###
 .apt_generated
+
+### Local development files ###
+.DS_Store
+.idea/
+*.iml
+*.log
 .classpath
 .factorypath
 .project
