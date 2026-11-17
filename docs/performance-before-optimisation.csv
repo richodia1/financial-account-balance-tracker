@@ -1,0 +1,7 @@
+scenario,transactions,pack_p50_ms,pack_p95_ms,pipeline_p50_ms,pipeline_p95_ms,batches,lower_bound,excess_over_bound,optimality_proven,fill_percent,arrival_next_fit_batches,json_bytes
+uniform,1000,2.355,4.136,4.238,6.484,248,248,0,true,99.768,290,16404
+uniform,100000,74.199,77.933,88.512,96.774,24970,24969,1,false,99.995,29800,1648794
+minimum_amount,1000,0.178,0.259,0.650,0.935,1,1,0,true,20.000,1,98
+minimum_amount,100000,10.501,13.096,14.321,24.421,20,20,0,true,100.000,20,1429
+maximum_amount,1000,0.233,0.822,1.006,1.891,500,500,0,true,100.000,500,33529
+maximum_amount,100000,18.176,101.646,54.294,87.738,50000,50000,0,true,100.000,50000,3350029

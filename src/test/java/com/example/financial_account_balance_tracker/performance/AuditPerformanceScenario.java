@@ -6,6 +6,7 @@ import com.example.financial_account_balance_tracker.model.AuditBatch;
 import com.example.financial_account_balance_tracker.model.AuditBatchingResult;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.model.Transaction;
+import com.example.financial_account_balance_tracker.service.impl.OptimizingAuditBatchingService;
 import com.example.financial_account_balance_tracker.service.impl.BestFitDecreasingAuditBatchingService;
 import com.example.financial_account_balance_tracker.service.impl.InMemoryBankAccountService;
 import com.example.financial_account_balance_tracker.service.impl.InMemoryTransactionAuditService;
@@ -39,7 +40,7 @@ class AuditPerformanceScenario {
 
     private static final long SEED = 62831;
     private static final long CAPACITY = AuditBatch.MAX_ABSOLUTE_VALUE.movePointRight(2).longValueExact();
-    private final BestFitDecreasingAuditBatchingService service = new BestFitDecreasingAuditBatchingService();
+    private final OptimizingAuditBatchingService service = new OptimizingAuditBatchingService();
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
 
     @Test
@@ -51,8 +52,8 @@ class AuditPerformanceScenario {
         }
         StringBuilder report = new StringBuilder("scenario,transactions,pack_p50_ms,pack_p95_ms,pipeline_p50_ms,"
                 + "pipeline_p95_ms,batches,lower_bound,excess_over_bound,optimality_proven,fill_percent,"
-                + "arrival_next_fit_batches,json_bytes\n");
-        for (String scenario : List.of("uniform", "minimum_amount", "maximum_amount")) {
+                + "initial_bfd_batches,batches_saved,arrival_next_fit_batches,json_bytes\n");
+        for (String scenario : List.of("uniform", "minimum_amount", "maximum_amount", "repair_case")) {
             for (int size : new int[] {1000, 100000}) {
                 AuditSubmission input = input(scenario, size);
                 for (int warmup = 0; warmup < warmups; warmup++) {
@@ -74,12 +75,13 @@ class AuditPerformanceScenario {
                 }
                 long totalPence = totalPence(input);
                 double fillPercent = 100.0 * totalPence / (result.batches().size() * (double) CAPACITY);
-                report.append(String.format(Locale.ROOT, "%s,%d,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%s,%.3f,%d,%d%n",
+                int initialBatches = new BestFitDecreasingAuditBatchingService().pack(input).batches().size();
+                report.append(String.format(Locale.ROOT, "%s,%d,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%s,%.3f,%d,%d,%d,%d%n",
                         scenario, size, percentileMillis(packingTimes, 0.50), percentileMillis(packingTimes, 0.95),
                         percentileMillis(pipelineTimes, 0.50), percentileMillis(pipelineTimes, 0.95),
                         result.batches().size(), result.batchCountLowerBound(),
                         result.batches().size() - result.batchCountLowerBound(), result.optimalityProven(),
-                        fillPercent, arrivalNextFitBatchCount(input), jsonBytes));
+                        fillPercent, initialBatches, initialBatches - result.batches().size(), arrivalNextFitBatchCount(input), jsonBytes));
             }
         }
         Path target = Path.of("target");
@@ -172,6 +174,8 @@ class AuditPerformanceScenario {
                 case "uniform" -> random.nextLong(20000, 50000001);
                 case "minimum_amount" -> 20000;
                 case "maximum_amount" -> 50000000;
+                case "repair_case" -> i < size - 6 ? 50000000
+                        : new long[] {44000000, 25000000, 20000000, 39000000, 34000000, 27000000}[i - (size - 6)];
                 default -> throw new IllegalArgumentException("Unknown scenario: " + scenario);
             };
             transactions.add(new Transaction(new UUID(0, i), BigDecimal.valueOf(i % 2 == 0 ? pennies : -pennies, 2)));

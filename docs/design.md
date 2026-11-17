@@ -112,7 +112,8 @@ they would violate the configured transaction count.
 
 ## Follow batch packing
 
-`BestFitDecreasingAuditBatchingService` creates an independent, weighted view of
+The default `OptimizingAuditBatchingService` begins with
+`BestFitDecreasingAuditBatchingService`, which creates an independent, weighted view of
 the submission; the original transaction order stays intact. Each magnitude is
 converted to exact whole pennies. The view is sorted largest first, so smaller
 transactions can fill space around larger ones.
@@ -127,7 +128,7 @@ Mutable construction state is local to a single call. The result contains
 immutable `AuditBatch` objects retaining the actual transaction assignments, not
 just counters. Each batch independently validates the absolute-value limit and
 caches its exact decimal total. This allows tests to inspect every assignment.
-Packing is O(N log N) time and O(N) space; calls do not share mutable state.
+Initial packing is O(N log N) time and O(N) space; calls do not share mutable state.
 
 Credit and debit signs only affect the account balance. Both count positively
 toward audit capacity, so two opposite GBP 500,000 transactions fill one batch.
@@ -139,8 +140,27 @@ total-volume bound and the number of items larger than half the capacity.
 Equality between the bound and the actual count proves optimality. Otherwise the
 result is unproven; this heuristic does not guarantee a global minimum. Known
 counterexamples and weak-bound cases are tested and described in the README.
-An exact optimization requirement would need a different implementation behind
-the same service interface, with its computational costs assessed separately.
+The default wrapper then improves results where its bounded exact search can do
+so. Submissions with at most 18 transactions are solved in full, proving their
+minimum even when the initial bound was weak. Larger submissions receive at most
+two local repair passes: each selects up to six underfilled batches containing at
+most 18 transactions altogether, starting with the lowest totals. A batch that
+would exceed that item budget is skipped. A volume check avoids searches that
+cannot possibly reduce the selected count. Before sorting candidates, a linear
+check also rules out repair when even six copies of the lightest eligible batch
+would exceed five batches of capacity.
+
+`SmallSetExactBatchPacker` stores the minimum bin count and lightest final-bin
+load for every subset, considering each possible final item. It retains parent
+choices and reconstructs the transaction order, then the exact batch assignments.
+Work is O(K * 2^K) time and O(2^K) space, with K capped at 18. Only strictly better
+local assignments replace initial batches. Every transaction occurrence is retained.
+
+The former 1,000-item cost counterexample now reaches 499 batches. Local exactness
+does not prove a global optimum: the global lower bound is preserved for larger
+submissions, and a separate bounded-search counterexample is still documented.
+Solving the entire small submission can legitimately tighten that bound to its
+exact minimum. This distinction keeps the optimality flag meaningful.
 
 ## Follow console output
 
@@ -213,11 +233,15 @@ construct a fresh implementation directly to isolate individual scenarios.
   boundaries, earlier-batch reuse, tightest-fit selection, duplicate occurrences,
   deterministic ordering, lower bounds and heuristic counterexamples. Seeded
   inputs verify exact totals and preservation of all 1,000 or 100,000 transactions.
-- `service.impl.AuditPackingQualityTests` uses an independent exact subset solver
+- `service.impl.OptimizingAuditBatchingServiceTests` checks exact small solutions,
+  duplicate occurrence preservation, the 18-item bound, non-increasing counts on
+  large inputs, conservative proof metadata and a remaining repair limitation.
+- `service.impl.AuditPackingQualityTests` uses independent exhaustive bin assignments
   on four known cases and 32 seeded small cases. It checks that reported lower
-  bounds never exceed the exact minimum and that any proven-optimal result really
-  has that minimum count. The exponential solver is limited to small test inputs
-  and is not part of the production packing path.
+  bounds never exceed the exact minimum and that the default small-input solver
+  reaches that count. It also checks the repaired 1,000-item counterexample.
+  This test oracle uses a different strategy from production subset dynamic
+  programming, and is limited to small test inputs.
 - `audit.JsonAuditSubmissionHandlerTests` parses the JSON contract and exercises
   console-write failures.
 - The application context test verifies that the application configuration loads.

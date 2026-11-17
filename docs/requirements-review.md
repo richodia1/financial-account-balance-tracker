@@ -1,12 +1,12 @@
 # Requirements Review
 
-Review date: 17 November 2026. Code baseline: `42a9588`, plus the default-window
-packing-quality regression test added with this review.
+Review date: 17 November 2026. Initial review baseline: `00509fc`. Updated here
+for bounded exact repair and the associated correctness/performance checks.
 
 The main processing, balance-enquiry and audit-output paths are implemented and
 tested. **A guaranteed minimum batch count remains an open requirement.** The
-current best-fit decreasing strategy can emit more batches than necessary, even
-for a valid 1,000-transaction window. Passing the current test suite does not
+default service repairs the original 500-to-499 case, but its bounded search can
+still miss the minimum on another valid 1,000-transaction window. Passing the test suite does not
 establish full compliance with a strict minimum-cost requirement.
 
 ## Behavior and evidence
@@ -29,15 +29,16 @@ or the matching package beneath `src/test/java`.
 | Exactly 1,000 transactions per default submission | Verified | Collector and dispatcher enforce complete windows; tests cover 999, 1,000, 1,001, multiple windows and shutdown with an incomplete window. |
 | One or more nonempty batches per submission | Verified | Packing retains actual transaction assignments in immutable batches; preservation tests cover repeated occurrences and large windows. |
 | Absolute value per batch at most GBP 1,000,000 | Verified | Integer-penny placement plus independent model validation. Opposite signs consume capacity; tests cover an exact fit and one penny over. |
-| Minimum number of batches | Open gap | Best-fit decreasing is heuristic. The default-window counterexample below proves that the current algorithm can miss the minimum. |
+| Minimum number of batches | Partly resolved; global guarantee open | Exact small-set solving and bounded local repair fix the original default-window counterexample. Another bounded-search counterexample remains below. |
 | Console submission summary | Verified | `audit.JsonAuditSubmissionHandler` prints one valid JSON line per complete submission, with numeric totals in pounds and transaction counts. Contract tests parse the document. |
 | Demonstrate scaling to 100,000 transactions | Demonstrated locally | Functional tests and the opt-in performance scenario cover 100,000-item windows, including actual account-to-JSON processing. The performance report defines exclusions and measurement limits. |
 | Generic domain content | Checked | Domain code and project prose use generic account concepts and contain no actual customer, employer or individual names. Standard dependency names and upstream notices remain intact. |
 | Public source availability | Checked on review date | Repository metadata was readable without credentials and reported public visibility. This is an external property, not an application guarantee. |
 
-## Open cost-minimisation finding
+## Cost-minimisation status
 
-The production service is `BestFitDecreasingAuditBatchingService`. Consider a
+The production service is `OptimizingAuditBatchingService`, which starts with
+best-fit decreasing and attempts bounded exact repair. Consider a
 1,000-transaction submission containing:
 
 - 994 transactions of magnitude GBP 500,000.
@@ -51,18 +52,34 @@ The first 994 transactions fill 497 batches. The remaining six can be packed int
 two batches with totals GBP 980,000 and GBP 910,000. That gives **499 batches**,
 which reaches the total-volume lower bound and therefore proves the minimum.
 
-The current heuristic instead places the six remainder transactions into three
-batches, producing **500 batches** overall. Its diagnostic correctly reports
-optimality as unproven, but that diagnostic does not repair the extra batch.
+Best-fit decreasing alone placed the six remainder transactions into three
+batches, producing **500 batches** overall. The default service now solves that
+six-item repair exactly, producing **499 batches** and proving the minimum.
 
-`AuditPackingQualityTests.exposesTheKnownCostGapInAValidOneThousandTransactionWindow`
-constructs both assignments and checks this result. This test documents a known
-limitation; it does not assert that the minimum-cost requirement has been met.
+`AuditPackingQualityTests.repairsTheKnownCostGapInAValidOneThousandTransactionWindow`
+checks the improvement, and a configuration test verifies the 499-batch JSON
+output through the default collection and dispatch pipeline.
 
-Resolving the requirement needs a stronger packing strategy and evidence of its
-optimality or a clearly agreed optimization policy. A bounded local improvement
-may reduce cost, but it must not be described as an exact global optimizer without
-a proof. Large-window performance must be reassessed after any packing change.
+Whole submissions of at most 18 items are solved exactly when the initial bound
+has not already proved optimality. Larger windows get at most two local passes,
+each considering up to six underfilled batches and 18 transactions in total.
+An exact local solution does not tighten the global lower bound by itself.
+
+A remaining valid 1,000-item construction is:
+
+- 974 items of magnitude GBP 500,000.
+- The same six remainder amounts listed above.
+- 20 items of magnitude GBP 200.
+
+The first 974 items fill 487 batches. The remainder can fit into batches of
+GBP 980,000 and GBP 914,000, giving an exact minimum of **489 batches**. The
+bounded strategy emits **490**: one underfilled batch has 21 transactions and is
+therefore outside the exact-search budget. It correctly reports optimality as
+unproven. `OptimizingAuditBatchingServiceTests` keeps this limitation explicit.
+
+The implementation now reduces the known cost gap without unbounded exponential
+work. An exact global optimizer is still required to guarantee a minimum for
+every arbitrary large input, with runtime and resource costs assessed separately.
 
 ## Operational assumptions
 
@@ -90,26 +107,29 @@ delivery, real-time scheduling or global-optimization guarantees.
 
 ## Validation record
 
-The review branch adds a demonstration guide and a regression test for the known
-cost gap. Checks completed on the review date:
+The initial review exposed the original cost gap. Validation after adding exact
+small-set solving and bounded local repair:
 
-- A Java 21 `./mvnw clean verify` completed successfully: 104 tests, no failures,
+- Java 21 clean verification and follow-up verification completed successfully:
+  114 tests, no failures,
   errors or skips, and an executable JAR produced.
-- The packaged JAR ran with normal producer and audit settings on a random local
-  port. Two consecutive JSON submissions each contained exactly 1,000
-  transactions, with every batch at or below the absolute-value limit. The
-  observed batch counts were 250 and 247; random generation makes those counts
-  illustrative rather than repeatable.
-- HTTP checks returned 200 for a balance enquiry, 404 at the root, 405 for POST
-  and 406 for a request accepting only HTML. The successful response used JSON,
-  GBP currency and a no-store cache header.
-- A fresh packaged instance with producers disabled returned GBP 0.00 across
-  repeated enquiries and emitted no audit submissions.
-- Both owned application processes shut down cleanly. The live instance emitted
-  no additional partial submission during shutdown.
+- The default configured pipeline regression produced 499 batches for the
+  repaired 1,000-item case, preserving the complete submission count.
+- The rebuilt packaged JAR ran with normal producer and audit settings on a
+  random local port. Its observed JSON submission contained exactly 1,000
+  transactions in 251 batches, all within the absolute-value limit. The balance
+  API returned HTTP 200 with GBP currency, and the owned process shut down cleanly.
+  Random generation makes that observed batch count illustrative, not repeatable.
+- All eight opt-in performance scenarios completed with a 512 MiB maximum heap,
+  including repaired cases at 1,000 and 100,000 transactions. Current CSV results
+  match the generated measurement artifacts.
+- Real-server regression tests cover JSON balance responses, exact decimal
+  values, no-store headers, read-only behavior, POST 405 and HTML-only Accept 406.
+  Initial-review packaged checks additionally verified root 404, a fresh balance
+  of GBP 0.00 with producers disabled, and no incomplete submission on shutdown.
 - Local documentation links and whitespace checks passed; the domain/prose
   content scan found no identifying customer or individual references.
 
-The earlier performance results are retained unchanged because this branch does
-not alter the production algorithm. See the [performance report](performance.md)
-and [demonstration guide](demonstration-guide.md).
+Performance was remeasured using the actual default service; earlier CSV results
+remain available for context. See the [performance report](performance.md) and
+[demonstration guide](demonstration-guide.md).

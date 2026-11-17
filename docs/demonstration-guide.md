@@ -71,8 +71,8 @@ audit capacity. Credits do not cancel debits for packing.
 
 A true optimality flag means the batch count reaches a valid lower bound. A false
 flag means the current result is unproven; it can represent either a suboptimal
-packing or a weak bound. The [review's 1,000-item counterexample](requirements-review.md#open-cost-minimisation-finding)
-shows a case where an unnecessary batch really is emitted.
+packing or a weak bound. The [cost-minimisation review](requirements-review.md#cost-minimisation-status)
+shows the repaired 500-to-499 case and a remaining bounded-search limitation.
 
 ## 4. Show a deterministic starting balance
 
@@ -105,6 +105,8 @@ All packages below sit under `com.example.financial_account_balance_tracker`.
 | `service.impl.InMemoryTransactionAuditService` | Collects disjoint complete windows and clears a partial window only after successful hand-off. |
 | `audit.AsyncAuditDispatcher` | Uses a bounded queue to move downstream work outside the account lock. It retains failed work in memory and rejects new complete windows. |
 | `service.impl.BestFitDecreasingAuditBatchingService` | Sorts magnitudes largest first; a capacity-indexed tree finds the tightest existing fit. A deque preserves batches with equal remaining capacity. |
+| `service.impl.OptimizingAuditBatchingService` | Keeps an already proven initial result, solves small submissions exactly and attempts bounded local repair on larger submissions. |
+| `service.impl.SmallSetExactBatchPacker` | Reconstructs an exact packing for at most 18 transactions using subset states and parent choices. |
 | `model.AuditBatch` and `model.AuditBatchingResult` | Retain immutable assignments, validate capacity and expose the lower-bound result. |
 | `audit.JsonAuditSubmissionHandler` and audit DTOs | Map batches to the output shape and serialize one JSON document per submission. |
 
@@ -119,8 +121,10 @@ Keep these explanations precise:
 - **Hand-off:** queue `offer` does not wait for downstream work. Snapshot copying
   still costs O(N) at the window boundary while the account operation is active.
 - **Packing:** all mutable packing state is local to one call. Sorting and the
-  balanced tree give O(N log N) time and O(N) additional space. This is a heuristic
-  when the lower bound is not reached.
+  balanced tree give O(N log N) time and O(N) additional space for the initial
+  stage. Exact repair adds O(K * 2^K) work with K at most 18 and at most two local
+  passes. A local optimum does not prove a global optimum; larger windows remain
+  heuristic when the global lower bound is not reached.
 - **Failure:** a full queue rejects the completing transaction before the balance
   commit. A handler failure retains work in memory, with no automatic retry or
   durable recovery.

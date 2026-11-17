@@ -39,13 +39,15 @@ timing, with deterministic IDs and alternating credit/debit signs:
 | `uniform` | Seeded whole-pence random values, GBP 200.00 through GBP 500,000.00 inclusive; seed 62831. |
 | `minimum_amount` | Every transaction has magnitude GBP 200.00. |
 | `maximum_amount` | Every transaction has magnitude GBP 500,000.00. |
+| `repair_case` | All but six items have magnitude GBP 500,000; the final six are GBP 440,000, 250,000, 200,000, 390,000, 340,000 and 270,000. |
 
 Every case has three warmup iterations followed by seven measured iterations.
 Two elapsed-time measurements use `System.nanoTime()`:
 
 1. **Packing:** the production packing service receives an existing immutable
    submission. Timing includes weighted-view construction, sorting, tree-based
-   placement, immutable batch construction and lower-bound calculation.
+   placement, immutable batch construction, lower-bound calculation and the
+   default service's bounded exact repair when applicable.
 2. **Pipeline:** a single caller supplies a burst of transactions to the real
    synchronized account service. Timing includes balance arithmetic, audit
    collection, snapshot creation, queue hand-off, background packing, DTO mapping
@@ -75,23 +77,29 @@ separate measurements and should not be subtracted as a stage breakdown.
 ## Recorded results
 
 Run date: 17 November 2026. Runtime: Java 21.0.10, x86_64, eight available logical
-processors, maximum heap 512 MiB. The run completed all six cases successfully.
-The production packing algorithm is the same one introduced in commit `b5597f1`.
+processors, maximum heap 512 MiB. The run completed all eight cases successfully.
+The default `OptimizingAuditBatchingService` uses best-fit decreasing followed by
+bounded exact repair. The earlier six-case CSV for the unmodified best-fit
+decreasing implementation is retained as
+[performance-before-optimisation.csv](performance-before-optimisation.csv).
+These separate runs are context rather than a controlled statistical comparison.
 CSV results and environment settings are retained alongside this report in
 [performance-results.csv](performance-results.csv) and
 [performance-environment.txt](performance-environment.txt).
 
 | Scenario | Transactions | Packing P50 ms | Packing P95 ms | Pipeline P50 ms | Pipeline P95 ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Uniform | 1,000 | 2.355 | 4.136 | 4.238 | 6.484 |
-| Uniform | 100,000 | 74.199 | 77.933 | 88.512 | 96.774 |
-| Minimum amount | 1,000 | 0.178 | 0.259 | 0.650 | 0.935 |
-| Minimum amount | 100,000 | 10.501 | 13.096 | 14.321 | 24.421 |
-| Maximum amount | 1,000 | 0.233 | 0.822 | 1.006 | 1.891 |
-| Maximum amount | 100,000 | 18.176 | 101.646 | 54.294 | 87.738 |
+| Uniform | 1,000 | 2.844 | 8.787 | 4.141 | 4.575 |
+| Uniform | 100,000 | 89.090 | 92.167 | 91.181 | 108.758 |
+| Minimum amount | 1,000 | 0.163 | 0.184 | 0.647 | 0.757 |
+| Minimum amount | 100,000 | 14.195 | 31.575 | 22.051 | 28.018 |
+| Maximum amount | 1,000 | 0.278 | 0.667 | 1.386 | 3.693 |
+| Maximum amount | 100,000 | 19.170 | 28.806 | 45.592 | 75.732 |
+| Repair case | 1,000 | 0.605 | 0.886 | 1.325 | 2.336 |
+| Repair case | 100,000 | 23.584 | 26.881 | 39.180 | 43.376 |
 
-The maximum-amount packing case has a visible tail sample. Seven observations
-are too few to characterize or attribute it. The demonstration shows that the
+Some cases have visible tail samples. Seven observations are too few to
+characterize or attribute them. The demonstration shows that the
 larger window completes with the configured heap cap; it does not measure peak
 heap usage or establish an asymptotic running-time guarantee experimentally.
 
@@ -109,6 +117,14 @@ earlier batch. This simple next-fit baseline is not an exact optimizer.
 | Minimum amount | 100,000 | 20 | 20 | 0 | Yes | 100.000 | 20 |
 | Maximum amount | 1,000 | 500 | 500 | 0 | Yes | 100.000 | 500 |
 | Maximum amount | 100,000 | 50,000 | 50,000 | 0 | Yes | 100.000 | 50,000 |
+| Repair case | 1,000 | 499 | 499 | 0 | Yes | 99.978 | 499 |
+| Repair case | 100,000 | 49,999 | 49,999 | 0 | Yes | 100.000 | 49,999 |
+
+The CSV additionally reports `initial_bfd_batches` and `batches_saved`. The repair
+case improves from 500 to 499 batches at 1,000 items, and from 50,000 to 49,999 at
+100,000 items. Both reach their lower bound and are therefore proven optimal.
+The other recorded inputs retain their original batch counts. Fill percentages
+are rounded to three decimal places.
 
 `fill_percent` is the total absolute value divided by the capacity of all emitted
 batches. A partially filled batch is unavoidable for the minimum-amount 1,000-item
@@ -117,8 +133,8 @@ case: all GBP 200,000 fits into one batch, which is already the minimum count.
 `excess_over_bound` compares the result with a lower bound, not a known optimum.
 For the 100,000-item uniform case, the true optimum is either 24,969 or 24,970;
 this run does not determine which. High utilization alone is not proof of
-optimality. The best-fit decreasing implementation remains a heuristic whenever
-its lower bound is not reached.
+optimality. The bounded strategy remains heuristic on larger submissions whenever
+its global bound is not reached.
 
 The largest captured JSON document in this run was 3,350,029 UTF-8 bytes for the
 100,000-item maximum-amount case. Output volume and terminal throughput can matter
@@ -126,25 +142,37 @@ even when packing is fast. JSON byte counts include the final platform newline.
 
 ## Independent exact checks
 
-`AuditPackingQualityTests` compares production packing with an independent subset
-dynamic program on four known cases and 32 seeded small cases. The oracle tries
-every possible last item for each subset, retaining the fewest bins and then the
-lightest final bin. It is limited to 16 items because it takes O(N * 2^N) time and
-O(2^N) space. Production never invokes it.
+`AuditPackingQualityTests` compares production packing with independent exhaustive
+bin assignments on four known cases and 32 seeded small cases. The test oracle
+assigns each item to every feasible bin, pruning symmetric equal-load choices and
+branches that cannot improve the best count. It is limited to 16 items because
+the search is exponential. Production uses a different subset dynamic program
+and never invokes the test oracle.
 
 These tests check that lower bounds do not exceed the exact minimum, feasible
 counts do not fall below it, and every proven-optimal claim matches it. In
 particular:
 
 - Magnitudes `[440000, 250000, 200000, 390000, 340000, 270000]` have an exact
-  minimum of two batches; the production heuristic uses three and reports
-  optimality as unproven.
+  minimum of two batches; the default service now reaches it. Padding the case
+  to 1,000 items with GBP 500,000 transactions also reaches its minimum of 499.
 - Five magnitudes of GBP 340,000 need three batches, despite a volume lower bound
-  of two. A gap above that bound does not itself prove suboptimal packing.
+  of two. Whole-submission exact solving tightens the reported bound to three.
+
+A separate 1,000-item case still emits 490 batches when 489 suffice because an
+underfilled repair candidate exceeds the 18-item search budget. See the
+[requirements review](requirements-review.md#cost-minimisation-status). This
+remaining limitation is tested without falsely claiming a global optimum.
 
 ## Scaling limits
 
-Packing uses O(N log N) time and O(N) additional memory by construction. Collection
+Initial packing uses O(N log N) time and O(N) additional memory by construction.
+Repair uses O(K * 2^K) time and O(2^K) state space with K capped at 18, roughly
+3.25 MiB for state arrays at that limit. A large submission can invoke at most
+two such local searches, each on up to six underfilled batches; it never runs
+the exponential solver on the entire large window. Linear volume checks skip
+candidate sorting or exact search when the permitted group cannot reduce count.
+Collection
 uses O(N) snapshot copying when a window fills, inside the account operation.
 Packing and serialization run on the separate audit worker. A larger configured
 window therefore increases both audit work and the boundary-copy cost.
