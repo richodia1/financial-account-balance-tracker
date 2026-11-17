@@ -8,6 +8,8 @@ import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.TransactionAuditService;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
 import com.example.financial_account_balance_tracker.service.impl.InMemoryBankAccountService;
+import com.example.financial_account_balance_tracker.service.AuditBatchingService;
+import com.example.financial_account_balance_tracker.service.impl.OptimizingAuditBatchingService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -39,6 +41,7 @@ class AuditConfigurationTests {
                 .withUserConfiguration(AuditConfiguration.class)
                 .run(context -> {
                     assertThat(context.getBean(AuditSubmissionHandler.class)).isInstanceOf(JsonAuditSubmissionHandler.class);
+                    assertThat(context.getBean(AuditBatchingService.class)).isInstanceOf(OptimizingAuditBatchingService.class);
                     TransactionAuditService collector = context.getBean(TransactionAuditService.class);
                     for (int i = 1; i <= 1000; i++) {
                         collector.record(transaction(i));
@@ -47,6 +50,34 @@ class AuditConfigurationTests {
 
         assertThat(output.getOut().lines().filter(line -> line.startsWith("{\"submission\":")).toList())
                 .containsExactly("{\"submission\":{\"batches\":[{\"totalValueOfAllTransactions\":200000.00,\"countOfTransactions\":1000}]}}");
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void defaultPipelineRepairsTheKnownOneThousandTransactionCostGap(CapturedOutput output) {
+        JsonMapper mapper = JsonMapper.builder().build();
+        new ApplicationContextRunner()
+                .withBean(JsonMapper.class, () -> mapper)
+                .withUserConfiguration(AuditConfiguration.class)
+                .run(context -> {
+                    TransactionAuditService collector = context.getBean(TransactionAuditService.class);
+                    for (int i = 0; i < 994; i++) {
+                        collector.record(new Transaction(new UUID(0, i), new BigDecimal("500000.00")));
+                    }
+                    int id = 994;
+                    for (String amount : List.of("440000", "250000", "200000", "390000", "340000", "270000")) {
+                        collector.record(new Transaction(new UUID(0, id++), new BigDecimal(amount)));
+                    }
+                });
+        List<String> documents = output.getOut().lines().filter(line -> line.startsWith("{\"submission\":")).toList();
+        assertThat(documents).hasSize(1);
+        var batches = mapper.readTree(documents.getFirst()).at("/submission/batches");
+        assertThat(batches.size()).isEqualTo(499);
+        int count = 0;
+        for (var batch : batches) {
+            count += batch.get("countOfTransactions").intValue();
+        }
+        assertThat(count).isEqualTo(1000);
     }
 
     @Test

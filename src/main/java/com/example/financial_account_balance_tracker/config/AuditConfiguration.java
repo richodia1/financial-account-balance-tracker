@@ -5,7 +5,7 @@ import com.example.financial_account_balance_tracker.audit.AuditSubmissionHandle
 import com.example.financial_account_balance_tracker.audit.JsonAuditSubmissionHandler;
 import com.example.financial_account_balance_tracker.service.AuditBatchingService;
 import com.example.financial_account_balance_tracker.service.TransactionAuditService;
-import com.example.financial_account_balance_tracker.service.impl.BestFitDecreasingAuditBatchingService;
+import com.example.financial_account_balance_tracker.service.impl.OptimizingAuditBatchingService;
 import com.example.financial_account_balance_tracker.service.impl.InMemoryTransactionAuditService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -19,7 +19,7 @@ public class AuditConfiguration {
     @Bean
     @ConditionalOnMissingBean(AuditBatchingService.class)
     AuditBatchingService auditBatchingService() {
-        return new BestFitDecreasingAuditBatchingService();
+        return new OptimizingAuditBatchingService();
     }
 
     @Bean

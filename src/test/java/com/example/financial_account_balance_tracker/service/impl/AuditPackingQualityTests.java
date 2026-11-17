@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.SplittableRandom;
 import java.util.UUID;
@@ -21,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AuditPackingQualityTests {
 
     private static final long CAPACITY = AuditBatch.MAX_ABSOLUTE_VALUE.movePointRight(2).longValueExact();
-    private final BestFitDecreasingAuditBatchingService service = new BestFitDecreasingAuditBatchingService();
+    private final OptimizingAuditBatchingService service = new OptimizingAuditBatchingService();
 
     @ParameterizedTest
     @MethodSource("knownOptima")
@@ -32,14 +33,12 @@ class AuditPackingQualityTests {
 
         assertThat(exactMinimum).isEqualTo(minimum);
         assertThat(result.batchCountLowerBound()).isLessThanOrEqualTo(exactMinimum);
-        assertThat(result.batches().size()).isGreaterThanOrEqualTo(exactMinimum);
-        if (result.optimalityProven()) {
-            assertThat(result.batches()).hasSize(exactMinimum);
-        }
+        assertThat(result.batches()).hasSize(exactMinimum);
+        assertThat(result.optimalityProven()).isTrue();
     }
 
     @Test
-    void validatesLowerBoundsAndOptimalityClaimsAgainstAnExactSmallInstanceOracle() {
+    void findsTheExactMinimumForSeededSmallInputsAgainstAnIndependentAssignmentOracle() {
         SplittableRandom random = new SplittableRandom(789214);
         for (int sample = 0; sample < 32; sample++) {
             long[] pennies = new long[6 + random.nextInt(8)];
@@ -51,11 +50,36 @@ class AuditPackingQualityTests {
 
             assertThat(result.batchCountLowerBound()).as("Lower bound for sample %s", sample)
                     .isLessThanOrEqualTo(minimum);
-            assertThat(result.batches().size()).as("Feasible batch count for sample %s", sample)
-                    .isGreaterThanOrEqualTo(minimum);
-            assertThat(!result.optimalityProven() || result.batches().size() == minimum)
-                    .as("Optimality claim for sample %s", sample).isTrue();
+            assertThat(result.batches()).as("Exact batch count for sample %s", sample).hasSize(minimum);
+            assertThat(result.optimalityProven()).as("Optimality claim for sample %s", sample).isTrue();
         }
+    }
+
+    @Test
+    void repairsTheKnownCostGapInAValidOneThousandTransactionWindow() {
+        long[] pennies = new long[1000];
+        Arrays.fill(pennies, 0, 994, 50000000);
+        long[] remainder = {44000000, 25000000, 20000000, 39000000, 34000000, 27000000};
+        System.arraycopy(remainder, 0, pennies, 994, remainder.length);
+        AuditSubmission input = submission(pennies);
+        var result = service.pack(input);
+
+        // 497 full pairs plus two feasible remainder batches attain the volume bound.
+        List<AuditBatch> knownOptimal = new ArrayList<>();
+        List<Transaction> transactions = input.transactions();
+        for (int i = 0; i < 994; i += 2) {
+            knownOptimal.add(new AuditBatch(List.of(transactions.get(i), transactions.get(i + 1))));
+        }
+        knownOptimal.add(new AuditBatch(List.of(transactions.get(994), transactions.get(998), transactions.get(996))));
+        knownOptimal.add(new AuditBatch(List.of(transactions.get(997), transactions.get(999), transactions.get(995))));
+
+        assertThat(knownOptimal).hasSize(499);
+        List<Transaction> assigned = knownOptimal.stream().flatMap(batch -> batch.transactions().stream()).toList();
+        assertThat(assigned).hasSize(1000);
+        assertThat(new HashSet<>(assigned).equals(new HashSet<>(transactions))).isTrue();
+        assertThat(result.batchCountLowerBound()).isEqualTo(499);
+        assertThat(result.batches()).hasSize(499);
+        assertThat(result.optimalityProven()).isTrue();
     }
 
     private static Stream<Arguments> knownOptima() {
@@ -67,40 +91,40 @@ class AuditPackingQualityTests {
     }
 
     /**
-     * Exhaustive subset dynamic programming, independent of best-fit decreasing.
-     * For each subset, keep the fewest bins and then the lightest last bin.
-     * Considering each item as the last one explores every possible ordering.
-     * O(N * 2^N) time and O(2^N) space limit this oracle to small test inputs.
+     * Exhaustive bin assignments, independent of the production subset solver.
+     * Symmetric equal-load bins are interchangeable. Sorting only prunes search;
+     * every feasible non-equivalent assignment is still considered.
      */
     private static int exactMinimum(long[] pennies) {
         if (pennies.length < 1 || pennies.length > 16) {
             throw new IllegalArgumentException("The exact test oracle accepts one to sixteen transactions");
         }
-        int states = 1 << pennies.length;
-        int[] bins = new int[states];
-        long[] lastLoad = new long[states];
-        Arrays.fill(bins, Integer.MAX_VALUE);
-        Arrays.fill(lastLoad, Long.MAX_VALUE);
-        bins[0] = 1;
-        lastLoad[0] = 0;
-        for (int subset = 1; subset < states; subset++) {
-            for (int item = 0; item < pennies.length; item++) {
-                int bit = 1 << item;
-                if ((subset & bit) == 0) {
-                    continue;
-                }
-                int previous = subset ^ bit;
-                boolean fits = lastLoad[previous] + pennies[item] <= CAPACITY;
-                int candidateBins = bins[previous] + (fits ? 0 : 1);
-                long candidateLoad = fits ? lastLoad[previous] + pennies[item] : pennies[item];
-                if (candidateBins < bins[subset]
-                        || (candidateBins == bins[subset] && candidateLoad < lastLoad[subset])) {
-                    bins[subset] = candidateBins;
-                    lastLoad[subset] = candidateLoad;
-                }
+        long[] sorted = pennies.clone();
+        Arrays.sort(sorted);
+        int[] best = {pennies.length};
+        assign(sorted, sorted.length - 1, new long[pennies.length], 0, best);
+        return best[0];
+    }
+
+    private static void assign(long[] amounts, int item, long[] loads, int used, int[] best) {
+        if (used >= best[0]) {
+            return;
+        }
+        if (item < 0) {
+            best[0] = used;
+            return;
+        }
+        HashSet<Long> seen = new HashSet<>();
+        for (int bin = 0; bin < used; bin++) {
+            if (loads[bin] + amounts[item] <= CAPACITY && seen.add(loads[bin])) {
+                loads[bin] += amounts[item];
+                assign(amounts, item - 1, loads, used, best);
+                loads[bin] -= amounts[item];
             }
         }
-        return bins[states - 1];
+        loads[used] = amounts[item];
+        assign(amounts, item - 1, loads, used + 1, best);
+        loads[used] = 0;
     }
 
     private static AuditSubmission submission(long[] pennies) {

@@ -10,12 +10,17 @@ immutable transaction model, a thread-safe in-memory balance service and a REST
 balance endpoint. Dedicated credit and debit producers run automatically. Accepted
 transactions are collected into complete audit windows and handed to a dedicated
 worker. The worker packs those transactions into batches capped at GBP 1,000,000
-of absolute value and prints a JSON summary. Packing uses best-fit decreasing,
-with a lower-bound diagnostic that distinguishes proven optimal results from
-heuristic results. An opt-in performance demonstration measures packing and the
+of absolute value and prints a JSON summary. Packing starts with best-fit decreasing
+and applies bounded exact repair. A lower-bound diagnostic distinguishes proven
+optimal results from heuristic results. An opt-in performance demonstration measures packing and the
 account-to-JSON pipeline for 1,000- and 100,000-transaction submissions. See the
 [performance and packing-quality report](docs/performance.md) for results and
 remaining limits.
+
+See the [requirements review](docs/requirements-review.md) for implementation
+evidence and the open minimum-batch-count requirement. The
+[demonstration guide](docs/demonstration-guide.md) provides a build/run sequence,
+IDE settings and a code walkthrough.
 
 ## Package organization
 
@@ -55,6 +60,8 @@ service/
         BestFitDecreasingAuditBatchingService.java
         InMemoryBankAccountService.java
         InMemoryTransactionAuditService.java
+        OptimizingAuditBatchingService.java
+        SmallSetExactBatchPacker.java
 ```
 
 | Package | Responsibility |
@@ -157,8 +164,9 @@ bounds and known heuristic limitations. Seeded 1,000- and 100,000-transaction
 inputs verify that each transaction and the exact absolute total are preserved.
 Output tests parse the JSON document and exercise console-write failure handling;
 a configuration test runs the default collection-to-JSON pipeline.
-Additional quality tests compare small inputs against an independent exact
-subset solver, checking lower bounds and optimality claims.
+Additional quality tests compare small inputs against an independent exhaustive
+assignment solver. Tests cover exact repair, the 18-transaction limit, the repaired
+1,000-item cost counterexample and a remaining bounded-search limitation.
 
 ### Run the performance demonstration
 
@@ -290,7 +298,8 @@ console write cannot be rolled back and there is no automatic retry.
 
 ### Batch-count minimization
 
-`BestFitDecreasingAuditBatchingService` sorts by descending absolute amount, then
+The default `OptimizingAuditBatchingService` starts with
+`BestFitDecreasingAuditBatchingService`. That initial service sorts by descending absolute amount, then
 puts each transaction into the tightest existing batch that can hold it. It opens
 a new batch only when none fits. A `TreeMap` indexes remaining capacities and a
 deque retains every batch when several have the same capacity. Stable sorting and
@@ -300,21 +309,44 @@ Amounts are converted to exact integer pennies for capacity decisions. A balance
 tree avoids scanning every batch for each item: packing takes O(N log N) time and
 O(N) additional memory, including the sorted view and retained assignments.
 
-This is a scalable minimization **heuristic**, not an exact optimizer. Its
-`AuditBatchingResult` reports the greater of two valid lower bounds:
+The initial `AuditBatchingResult` reports the greater of two valid lower bounds:
 
 - `ceil(sum(abs(amount)) / 1,000,000)`.
 - The number of transactions individually larger than half the batch capacity,
   because no two of those transactions can share a batch.
 
-When the resulting batch count equals that bound, the result is provably optimal.
-A larger count means optimality is unproven; the bound itself can be weak.
-For example, magnitudes `[440000, 250000, 200000, 390000, 340000, 270000]`
-produce three batches with this heuristic, although two are possible:
-`[440000, 340000, 200000]` and `[390000, 270000, 250000]`. A regression test keeps
-this limitation explicit rather than claiming a guaranteed minimum. Five amounts
-of GBP 340,000 also produce three batches against a volume bound of two, but
-three really are necessary in that case.
+When that initial batch count reaches the bound, the result is already provably
+optimal and repair is skipped. Otherwise:
+
+1. Submissions of at most 18 transactions are solved exactly by subset dynamic
+   programming. This proves their minimum and can tighten a weak lower bound.
+2. Larger submissions may receive two repair passes. Each pass selects up to six
+   underfilled batches containing at most 18 transactions in total, prioritizing
+   the lowest totals. An exact solve is attempted only when the selected volume
+   could fit into fewer batches. Replacement happens only if it reduces count.
+
+A linear volume check skips candidate sorting when no group within the six-batch
+limit can eliminate a batch.
+
+`SmallSetExactBatchPacker` takes O(K * 2^K) time and O(2^K) space, with K at most
+18. Its state arrays use roughly 3.25 MiB at that limit. These fixed bounds keep
+exponential work away from the complete 1,000- or 100,000-item submission.
+Local repair preserves every transaction occurrence and cannot increase the
+initial count. It does not turn a local optimum into a global proof: larger
+submissions keep the original global lower bound.
+
+The former six-item counterexample `[440000, 250000, 200000, 390000, 340000, 270000]`
+now uses the proven minimum of two batches. The default-window version, padded
+with 994 transactions of magnitude GBP 500,000, improves from 500 to **499 batches**.
+Five GBP 340,000 items are also solved exactly: the returned lower bound is
+tightened from two to their actual minimum of three.
+
+Large inputs remain heuristic whenever the global bound is not reached. Batches
+with more than 18 transactions are skipped by repair. A valid remaining
+1,000-item case uses 490 batches when 489 suffice; the
+[requirements review](docs/requirements-review.md#cost-minimisation-status) gives
+the construction. A false optimality flag means unproven, rather than necessarily
+suboptimal, because global bounds can still be weak.
 
 The algorithm targets fast, low-cost packing for large windows. If a guaranteed
 minimum for every input is mandatory, this implementation needs an exact
