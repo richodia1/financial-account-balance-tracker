@@ -12,7 +12,10 @@ transactions are collected into complete audit windows and handed to a dedicated
 worker. The worker packs those transactions into batches capped at GBP 1,000,000
 of absolute value and prints a JSON summary. Packing uses best-fit decreasing,
 with a lower-bound diagnostic that distinguishes proven optimal results from
-heuristic results. A repeatable performance demonstration is the next stage.
+heuristic results. An opt-in performance demonstration measures packing and the
+account-to-JSON pipeline for 1,000- and 100,000-transaction submissions. See the
+[performance and packing-quality report](docs/performance.md) for results and
+remaining limits.
 
 ## Package organization
 
@@ -154,6 +157,27 @@ bounds and known heuristic limitations. Seeded 1,000- and 100,000-transaction
 inputs verify that each transaction and the exact absolute total are preserved.
 Output tests parse the JSON document and exercise console-write failure handling;
 a configuration test runs the default collection-to-JSON pipeline.
+Additional quality tests compare small inputs against an independent exact
+subset solver, checking lower bounds and optimality claims.
+
+### Run the performance demonstration
+
+With JDK 21 selected, run this separately from the normal test suite:
+
+```sh
+./mvnw -Dtest=AuditPerformanceScenario '-DargLine=-Xms256m -Xmx512m' test
+```
+
+It uses three warmup iterations and seven measured iterations per scenario and
+size. Timing results are written to `target/audit-performance.csv`; environment
+details are written to `target/audit-performance-environment.txt`. You can also
+run the scenario's test method directly in the IDE.
+
+The scenario class intentionally does not match the default test naming pattern,
+so ordinary `./mvnw clean verify` runs correctness tests without collecting timing
+samples. No latency threshold is enforced. See the
+[methodology and recorded results](docs/performance.md) before interpreting the
+measurements; JSON payload output to a terminal and producer pacing are excluded.
 
 ## Run
 

@@ -213,13 +213,34 @@ construct a fresh implementation directly to isolate individual scenarios.
   boundaries, earlier-batch reuse, tightest-fit selection, duplicate occurrences,
   deterministic ordering, lower bounds and heuristic counterexamples. Seeded
   inputs verify exact totals and preservation of all 1,000 or 100,000 transactions.
+- `service.impl.AuditPackingQualityTests` uses an independent exact subset solver
+  on four known cases and 32 seeded small cases. It checks that reported lower
+  bounds never exceed the exact minimum and that any proven-optimal result really
+  has that minimum count. The exponential solver is limited to small test inputs
+  and is not part of the production packing path.
 - `audit.JsonAuditSubmissionHandlerTests` parses the JSON contract and exercises
   console-write failures.
 - The application context test verifies that the application configuration loads.
+
+## Explain the scaling demonstration
+
+`performance.AuditPerformanceScenario` is opt-in, separate from normal tests.
+It constructs reproducible inputs before starting timers and measures two paths:
+packing alone, and a burst of account updates through collection, queue hand-off,
+background packing and JSON output to an in-memory stream. The latter uses the
+real account service, collector, dispatcher and output handler.
+
+Assertions, JSON parsing and worker shutdown are outside timed regions. The
+demonstration checks that every input occurrence survives packing, output counts
+and absolute totals match, and the final account balance is exact. It reports
+packing quality alongside timings, including a simple arrival-order baseline.
+The [performance report](performance.md) defines the measurements and their limits.
 
 ## Keep the current limits visible
 
 The balance, partial window, queued submissions and any failed in-flight work are
 in memory and are lost on restart. Packing is heuristic when its lower bound is
-not reached. The 100,000-transaction test verifies correctness, but is not a
-performance benchmark; a repeatable timing demonstration remains a separate step.
+not reached. Correctness tests and local timing samples demonstrate the larger
+window, but the timing demonstration is not a production load test. It excludes
+rate-limited generation, HTTP traffic, terminal output of the JSON payload,
+sustained queue contention and durable storage.
