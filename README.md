@@ -9,8 +9,10 @@ The application builds, tests and starts as an HTTP service. It implements an
 immutable transaction model, a thread-safe in-memory balance service and a REST
 balance endpoint. Dedicated credit and debit producers run automatically. Accepted
 transactions are collected into complete audit windows and handed to a dedicated
-worker. Value-limited batch packing and the final batch-summary output are the
-next stage.
+worker. The worker packs those transactions into batches capped at GBP 1,000,000
+of absolute value and prints a JSON summary. Packing uses best-fit decreasing,
+with a lower-bound diagnostic that distinguishes proven optimal results from
+heuristic results. A repeatable performance demonstration is the next stage.
 
 ## Package organization
 
@@ -21,40 +23,48 @@ FinancialAccountBalanceTrackerApplication.java
 audit/
     AsyncAuditDispatcher.java
     AuditSubmissionHandler.java
+    JsonAuditSubmissionHandler.java
 config/
     AuditConfiguration.java
     ProducerConfiguration.java
 controller/
     BalanceController.java
 dto/
+    AuditBatchSummary.java
+    AuditSubmissionOutput.java
+    AuditSubmissionSummary.java
     BalanceResponse.java
 enums/
     TransactionType.java
 model/
+    AuditBatch.java
+    AuditBatchingResult.java
     AuditSubmission.java
     Transaction.java
 producer/
     RandomTransactionFactory.java
     TransactionProducer.java
 service/
+    AuditBatchingService.java
     BankAccountService.java
     TransactionAuditService.java
     impl/
+        BestFitDecreasingAuditBatchingService.java
         InMemoryBankAccountService.java
         InMemoryTransactionAuditService.java
 ```
 
 | Package | Responsibility |
 | --- | --- |
-| `audit` | Bounded hand-off, background processing and the downstream handler contract. |
+| `audit` | Bounded hand-off, background processing and console JSON output. |
 | `config` | Component wiring, producer activation and audit window/queue configuration. |
 | `controller` | HTTP routing, response status, headers and response assembly. |
-| `dto` | Data transferred across the HTTP boundary. |
+| `dto` | Data transferred across the HTTP and console output boundaries. |
 | `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
 | `model` | Internal business data and its invariants, including valid signed amounts. |
 | `producer` | Random transaction creation, scheduling and worker lifecycle. |
-| `service` | The account-processing and balance-enquiry contract. |
-| `service.impl` | The in-memory implementation, exact arithmetic and synchronization. |
+| `service` | Contracts for account processing, audit collection and batch packing. |
+| `service.impl` | In-memory balance/collection and the batch-packing algorithm. |
 
 Tests mirror these packages under `src/test/java`. See the
 [design walkthrough](docs/design.md) for the request flow, transaction flow and
@@ -138,6 +148,12 @@ concurrent account test verifies that all 8,000 accepted transactions appear
 exactly once across eight submissions. A functional test also collects a
 100,000-transaction window. A configured integration test verifies that a slow
 audit handler does not block account processing or balance enquiries.
+Packing tests verify absolute-value limits, exact-capacity and one-penny-over
+boundaries, repeated transaction occurrences, deterministic ordering, lower
+bounds and known heuristic limitations. Seeded 1,000- and 100,000-transaction
+inputs verify that each transaction and the exact absolute total are preserved.
+Output tests parse the JSON document and exercise console-write failure handling;
+a configuration test runs the default collection-to-JSON pipeline.
 
 ## Run
 
@@ -222,16 +238,65 @@ drains completed submissions. Its memory use is bounded by the partial window,
 four queued windows by default, and one in-flight window. All of this state is
 in memory and is lost on application restart.
 
-The current handler reports collection only. At the target generation rate,
-the first message should appear after roughly 20 seconds:
+## Audit batches and console output
 
-```text
-Collected audit submission 1 containing 1000 transactions
+`JsonAuditSubmissionHandler` processes each complete window on the audit worker.
+Every transaction goes into exactly one batch within its own submission.
+Transactions may be reordered for packing; the source window remains unchanged.
+The total of **absolute** amounts in each batch cannot exceed GBP 1,000,000.00.
+For example, GBP 500,000 credit plus GBP 500,000 debit fills a batch; it does not
+have zero audit value. The immutable `AuditBatch` model also enforces the limit.
+An individual amount above the capacity cannot be packed and causes a retained
+handler failure. The normal producers never generate such an amount.
+
+At the target generation rate, the first JSON line appears after roughly
+20 seconds, with another after each complete 1,000-transaction window. Each line
+is one valid JSON document with numeric totals in pounds and transaction counts.
+For illustration, 1,000 transactions of magnitude GBP 2,000 produce:
+
+```json
+{"submission":{"batches":[{"totalValueOfAllTransactions":1000000.00,"countOfTransactions":500},{"totalValueOfAllTransactions":1000000.00,"countOfTransactions":500}]}}
 ```
 
-The next stage will replace this collection diagnostic with value-limited batch
-packing and the required batch-summary output. This stage does not yet choose
-batches or claim to minimize their number.
+Normal application logs accompany the JSON lines. A separate diagnostic records
+the submission sequence, transaction count, batch count, lower bound and whether
+optimality has been proven. It does not add fields to the JSON contract.
+A console-write error fails the handler and retains the submission; a partial
+console write cannot be rolled back and there is no automatic retry.
+
+### Batch-count minimization
+
+`BestFitDecreasingAuditBatchingService` sorts by descending absolute amount, then
+puts each transaction into the tightest existing batch that can hold it. It opens
+a new batch only when none fits. A `TreeMap` indexes remaining capacities and a
+deque retains every batch when several have the same capacity. Stable sorting and
+FIFO tie-breaking give repeatable results for the same input.
+
+Amounts are converted to exact integer pennies for capacity decisions. A balanced
+tree avoids scanning every batch for each item: packing takes O(N log N) time and
+O(N) additional memory, including the sorted view and retained assignments.
+
+This is a scalable minimization **heuristic**, not an exact optimizer. Its
+`AuditBatchingResult` reports the greater of two valid lower bounds:
+
+- `ceil(sum(abs(amount)) / 1,000,000)`.
+- The number of transactions individually larger than half the batch capacity,
+  because no two of those transactions can share a batch.
+
+When the resulting batch count equals that bound, the result is provably optimal.
+A larger count means optimality is unproven; the bound itself can be weak.
+For example, magnitudes `[440000, 250000, 200000, 390000, 340000, 270000]`
+produce three batches with this heuristic, although two are possible:
+`[440000, 340000, 200000]` and `[390000, 270000, 250000]`. A regression test keeps
+this limitation explicit rather than claiming a guaranteed minimum. Five amounts
+of GBP 340,000 also produce three batches against a volume bound of two, but
+three really are necessary in that case.
+
+The algorithm targets fast, low-cost packing for large windows. If a guaranteed
+minimum for every input is mandatory, this implementation needs an exact
+optimization strategy with separately assessed runtime and dependency costs.
+See the [optimization formulation](https://www.scipopt.org/scip/doc/html/BINPACKING_PROBLEM.php)
+and the [heuristic/optimization discussion](https://scipbook.readthedocs.io/en/latest/bpp.html).
 
 ## Balance API
 

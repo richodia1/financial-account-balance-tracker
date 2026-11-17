@@ -2,25 +2,30 @@ package com.example.financial_account_balance_tracker.config;
 
 import com.example.financial_account_balance_tracker.audit.AsyncAuditDispatcher;
 import com.example.financial_account_balance_tracker.audit.AuditSubmissionHandler;
+import com.example.financial_account_balance_tracker.audit.JsonAuditSubmissionHandler;
+import com.example.financial_account_balance_tracker.service.AuditBatchingService;
 import com.example.financial_account_balance_tracker.service.TransactionAuditService;
+import com.example.financial_account_balance_tracker.service.impl.BestFitDecreasingAuditBatchingService;
 import com.example.financial_account_balance_tracker.service.impl.InMemoryTransactionAuditService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import tools.jackson.databind.json.JsonMapper;
 
 @Configuration(proxyBeanMethods = false)
 public class AuditConfiguration {
 
-    private static final Logger LOG = LoggerFactory.getLogger(AuditConfiguration.class);
+    @Bean
+    @ConditionalOnMissingBean(AuditBatchingService.class)
+    AuditBatchingService auditBatchingService() {
+        return new BestFitDecreasingAuditBatchingService();
+    }
 
     @Bean
     @ConditionalOnMissingBean(AuditSubmissionHandler.class)
-    AuditSubmissionHandler auditSubmissionHandler() {
-        return submission -> LOG.info("Collected audit submission {} containing {} transactions",
-                submission.sequence(), submission.transactions().size());
+    AuditSubmissionHandler auditSubmissionHandler(AuditBatchingService batchingService, JsonMapper jsonMapper) {
+        return new JsonAuditSubmissionHandler(batchingService, jsonMapper, System.out);
     }
 
     @Bean(destroyMethod = "stop")

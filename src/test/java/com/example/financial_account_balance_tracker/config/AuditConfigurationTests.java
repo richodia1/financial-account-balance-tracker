@@ -2,15 +2,20 @@ package com.example.financial_account_balance_tracker.config;
 
 import com.example.financial_account_balance_tracker.audit.AsyncAuditDispatcher;
 import com.example.financial_account_balance_tracker.audit.AuditSubmissionHandler;
+import com.example.financial_account_balance_tracker.audit.JsonAuditSubmissionHandler;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.TransactionAuditService;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
 import com.example.financial_account_balance_tracker.service.impl.InMemoryBankAccountService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -25,6 +30,24 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AuditConfigurationTests {
+
+    @Test
+    @ExtendWith(OutputCaptureExtension.class)
+    void defaultHandlerPacksACompleteWindowAndWritesTheRequiredJson(CapturedOutput output) {
+        new ApplicationContextRunner()
+                .withBean(JsonMapper.class, () -> JsonMapper.builder().build())
+                .withUserConfiguration(AuditConfiguration.class)
+                .run(context -> {
+                    assertThat(context.getBean(AuditSubmissionHandler.class)).isInstanceOf(JsonAuditSubmissionHandler.class);
+                    TransactionAuditService collector = context.getBean(TransactionAuditService.class);
+                    for (int i = 1; i <= 1000; i++) {
+                        collector.record(transaction(i));
+                    }
+                });
+
+        assertThat(output.getOut().lines().filter(line -> line.startsWith("{\"submission\":")).toList())
+                .containsExactly("{\"submission\":{\"batches\":[{\"totalValueOfAllTransactions\":200000.00,\"countOfTransactions\":1000}]}}");
+    }
 
     @Test
     void defaultsToExactlyOneThousandTransactionsAndDrainsTheCompletedWindowOnClose() {
