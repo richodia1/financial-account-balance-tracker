@@ -5,6 +5,8 @@
 `FinancialAccountBalanceTrackerApplication` starts the application and enables
 component scanning beneath its base package. The controller and service
 implementation are discovered through their framework annotations.
+`ProducerConfiguration` wires the random transaction factory and lifecycle-managed
+producer when `tracker.producer.enabled` is true or unspecified.
 
 ## Follow a balance enquiry
 
@@ -45,8 +47,31 @@ the type consistent with the amount.
 
 `BankAccountService.processTransaction` accepts a transaction. The implementation
 adds its signed amount to the existing balance inside a synchronized method.
-The future producers will call this interface; they will not perform balance
-calculations themselves.
+The producers call this interface; they do not perform balance calculations
+themselves.
+
+## Follow automatic generation
+
+`producer.RandomTransactionFactory` selects a random integer number of pennies
+between 20,000 and 50,000,000 inclusive. It converts that value to a decimal amount,
+applies the sign for the requested `TransactionType` and creates a random UUID.
+Thread-local randomness supports calls from both producer threads.
+
+`producer.TransactionProducer` owns two separate single-thread scheduled
+executors. One executes credit generation on `credit-producer`; the other executes
+debit generation on `debit-producer`. A fixed-rate period of 40 ms gives each a
+target rate of 25 transactions per second.
+
+The class implements `SmartLifecycle`. Startup schedules both recurring tasks,
+and repeated startup calls do not create duplicate tasks. Shutdown cancels future
+runs and waits for in-flight work with bounded timeouts. A runtime failure during
+generation or processing logs an error and requests shutdown of both workers.
+That failure path requests shutdown without waiting for the current worker to
+join itself.
+
+The configuration flag can remove the producer beans entirely. This keeps manual
+balance checks and HTTP tests deterministic while allowing the normal application
+to generate transactions automatically.
 
 ## Explain money precision
 
@@ -82,10 +107,17 @@ construct a fresh implementation directly to isolate individual scenarios.
 - `controller.BalanceControllerIntegrationTests` starts a real HTTP server on a
   random available port and uses the real account service. It checks the JSON
   contract, decimal precision, live updates, read-only requests and HTTP errors.
+- `producer.RandomTransactionFactoryTests` covers inclusive amount boundaries,
+  signs, whole pennies and generated IDs.
+- `producer.TransactionProducerTests` checks scheduling through captured tasks
+  and also observes real dedicated worker threads using latches. It covers normal
+  shutdown, startup failures and processing failures without relying on exact
+  wall-clock transaction counts.
+- `config.ProducerConfigurationTests` checks conditional activation, automatic
+  startup and shutdown when the application context closes.
 - The application context test verifies that the application configuration loads.
 
 ## Keep the current limits visible
 
-The state is in memory and is lost on restart. Generation and audit batching are
-separate upcoming stages. Their packages will be introduced when those
-responsibilities are implemented.
+The state is in memory and is lost on restart. Audit collection and batching are
+upcoming stages; processed transactions are not yet retained for audit.
