@@ -7,8 +7,8 @@ transaction audit batches.
 
 The application builds, tests and starts as an HTTP service. It implements an
 immutable transaction model, a thread-safe in-memory balance service and a REST
-balance endpoint. Transaction producers and audit batching are the next
-implementation stages; processed transactions are not yet retained for audit.
+balance endpoint. Dedicated credit and debit producers run automatically. Audit
+batching is the next stage; processed transactions are not yet retained for audit.
 
 ## Package organization
 
@@ -16,6 +16,8 @@ All application packages sit beneath `com.example.financial_account_balance_trac
 
 ```text
 FinancialAccountBalanceTrackerApplication.java
+config/
+    ProducerConfiguration.java
 controller/
     BalanceController.java
 dto/
@@ -24,6 +26,9 @@ enums/
     TransactionType.java
 model/
     Transaction.java
+producer/
+    RandomTransactionFactory.java
+    TransactionProducer.java
 service/
     BankAccountService.java
     impl/
@@ -32,10 +37,12 @@ service/
 
 | Package | Responsibility |
 | --- | --- |
+| `config` | Component wiring and conditional activation of the producers. |
 | `controller` | HTTP routing, response status, headers and response assembly. |
 | `dto` | Data transferred across the HTTP boundary. |
 | `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
 | `model` | Internal business data and its invariants, including valid signed amounts. |
+| `producer` | Random transaction creation, scheduling and worker lifecycle. |
 | `service` | The account-processing and balance-enquiry contract. |
 | `service.impl` | The in-memory implementation, exact arithmetic and synchronization. |
 
@@ -64,7 +71,7 @@ the reasoning behind the boundaries.
   readers. The framework creates one service instance by default.
 - Debits may take the balance below zero. No overdraft restriction is applied.
   Each processing call applies its transaction; IDs are not deduplication keys.
-- The producer will enforce the GBP 200 to GBP 500,000 generation range. The
+- The producer enforces the GBP 200 to GBP 500,000 generation range. The
   domain model and service accept any nonzero amount representable in whole
   pence, making the calculation logic independent of the generator's limits.
 - State is held in memory and is lost on application restart.
@@ -108,6 +115,10 @@ random available port and exercise the endpoint against the real account service
 They verify JSON decimal precision, live balance updates, read-only enquiries,
 cache-control headers and unsupported requests. A context-loading test verifies
 that the application can initialize its configuration without an external database.
+Producer tests cover inclusive amount boundaries, signed generation, the 40 ms
+scheduling period, dedicated worker threads, shutdown and failure handling.
+Configuration tests cover enabled and disabled generation. Balance API tests
+disable automatic generation so their account state stays deterministic.
 
 ## Run
 
@@ -133,6 +144,39 @@ Alternatively, run directly from source:
 On Windows, use `mvnw.cmd` instead of `./mvnw` and set `JAVA_HOME` to a JDK 21
 installation.
 
+## Transaction generation
+
+Generation starts automatically with the application:
+
+- `credit-producer` is a dedicated platform thread producing positive amounts.
+- `debit-producer` is a separate dedicated platform thread producing negative amounts.
+- Each has its own single-thread scheduled executor with a fixed-rate period of
+  40 ms: a target of 25 transactions per second per producer, 50 in total.
+- Amount magnitudes are random whole-pence values from GBP 200.00 through
+  GBP 500,000.00 inclusive. Transaction IDs are random UUIDs.
+- Each generated transaction goes through `BankAccountService.processTransaction`.
+
+Fixed-rate scheduling provides the target cadence; it is not a hard real-time
+guarantee under operating-system pauses or slow processing. A producer does not
+overlap its own executions. The two producers may call the account service
+concurrently.
+
+The startup log reports the configured credit and debit rates. If generation or
+processing throws a runtime exception, both producers stop and the error is
+logged. On normal application shutdown, future runs are cancelled and the
+application waits for in-flight processing, with a bounded shutdown timeout.
+
+To disable generation for manual checks:
+
+```sh
+java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar --tracker.producer.enabled=false
+```
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `server.port` | `8081` | HTTP listener port. |
+| `tracker.producer.enabled` | `true` | Automatically create and start both producers. |
+
 ## Balance API
 
 Retrieve the current balance:
@@ -141,11 +185,11 @@ Retrieve the current balance:
 curl -i http://localhost:8081/api/balance
 ```
 
-A fresh application returns HTTP 200 with `Content-Type: application/json`,
-`Cache-Control: no-store` and this body:
+A successful enquiry returns HTTP 200 with `Content-Type: application/json`,
+`Cache-Control: no-store` and a body such as:
 
 ```json
-{"balance":0.00,"currency":"GBP"}
+{"balance":12345.67,"currency":"GBP"}
 ```
 
 `balance` is a JSON number in pounds, serialized directly from the exact decimal
@@ -156,9 +200,10 @@ responses. Concurrent transactions may change the balance after a snapshot is re
 POST requests return HTTP 405. A request that only accepts HTML returns HTTP 406.
 The root path `/` has no application endpoint and returns HTTP 404.
 
-The transaction producers are not implemented yet, so a fresh application stays
-at zero until transactions are processed through the Java service. The HTTP
-integration tests apply credits and debits directly to that service before
+With generation enabled, repeat the request to observe the balance as generated
+transactions arrive. With generation disabled, a fresh application returns
+`{"balance":0.00,"currency":"GBP"}`. The HTTP integration tests disable the
+producers and apply known credits and debits directly to the service before
 verifying the resulting responses.
 
 ## Dependency choices
@@ -182,3 +227,5 @@ Reference documentation:
 - [Maven Wrapper](https://maven.apache.org/wrapper/)
 - [Decimal arithmetic](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/math/BigDecimal.html)
 - [Synchronization and memory visibility](https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html#jls-17.4.5)
+- [Periodic scheduling](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html)
+- [Application lifecycle](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/context/SmartLifecycle.html)
