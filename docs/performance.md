@@ -40,6 +40,7 @@ timing, with deterministic IDs and alternating credit/debit signs:
 | `minimum_amount` | Every transaction has magnitude GBP 200.00. |
 | `maximum_amount` | Every transaction has magnitude GBP 500,000.00. |
 | `repair_case` | All but six items have magnitude GBP 500,000; the final six are GBP 440,000, 250,000, 200,000, 390,000, 340,000 and 270,000. |
+| `extended_repair_case` | All but 26 items have magnitude GBP 500,000; the remainder is the same six amounts plus 20 items of magnitude GBP 200. |
 
 Every case has three warmup iterations followed by seven measured iterations.
 Two elapsed-time measurements use `System.nanoTime()`:
@@ -77,9 +78,9 @@ separate measurements and should not be subtracted as a stage breakdown.
 ## Recorded results
 
 Run date: 17 November 2026. Runtime: Java 21.0.10, x86_64, eight available logical
-processors, maximum heap 512 MiB. The run completed all eight cases successfully.
+processors, maximum heap 512 MiB. The run completed all ten cases successfully.
 The default `OptimizingAuditBatchingService` uses best-fit decreasing followed by
-bounded exact repair. The earlier six-case CSV for the unmodified best-fit
+exact small-set solving and bounded backtracking. The earlier six-case CSV for the unmodified best-fit
 decreasing implementation is retained as
 [performance-before-optimisation.csv](performance-before-optimisation.csv).
 These separate runs are context rather than a controlled statistical comparison.
@@ -89,14 +90,16 @@ CSV results and environment settings are retained alongside this report in
 
 | Scenario | Transactions | Packing P50 ms | Packing P95 ms | Pipeline P50 ms | Pipeline P95 ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Uniform | 1,000 | 2.844 | 8.787 | 4.141 | 4.575 |
-| Uniform | 100,000 | 89.090 | 92.167 | 91.181 | 108.758 |
-| Minimum amount | 1,000 | 0.163 | 0.184 | 0.647 | 0.757 |
-| Minimum amount | 100,000 | 14.195 | 31.575 | 22.051 | 28.018 |
-| Maximum amount | 1,000 | 0.278 | 0.667 | 1.386 | 3.693 |
-| Maximum amount | 100,000 | 19.170 | 28.806 | 45.592 | 75.732 |
-| Repair case | 1,000 | 0.605 | 0.886 | 1.325 | 2.336 |
-| Repair case | 100,000 | 23.584 | 26.881 | 39.180 | 43.376 |
+| Uniform | 1,000 | 3.556 | 5.687 | 5.037 | 10.845 |
+| Uniform | 100,000 | 84.802 | 109.673 | 103.823 | 197.881 |
+| Minimum amount | 1,000 | 0.237 | 0.356 | 1.032 | 1.367 |
+| Minimum amount | 100,000 | 11.896 | 14.984 | 16.617 | 18.208 |
+| Maximum amount | 1,000 | 0.484 | 0.698 | 1.635 | 2.187 |
+| Maximum amount | 100,000 | 26.846 | 33.537 | 30.302 | 36.221 |
+| Repair case | 1,000 | 0.824 | 2.518 | 1.795 | 2.289 |
+| Repair case | 100,000 | 25.879 | 27.889 | 39.455 | 80.444 |
+| Extended repair case | 1,000 | 0.369 | 0.512 | 0.818 | 2.136 |
+| Extended repair case | 100,000 | 22.124 | 31.605 | 36.110 | 49.213 |
 
 Some cases have visible tail samples. Seven observations are too few to
 characterize or attribute them. The demonstration shows that the
@@ -119,10 +122,14 @@ earlier batch. This simple next-fit baseline is not an exact optimizer.
 | Maximum amount | 100,000 | 50,000 | 50,000 | 0 | Yes | 100.000 | 50,000 |
 | Repair case | 1,000 | 499 | 499 | 0 | Yes | 99.978 | 499 |
 | Repair case | 100,000 | 49,999 | 49,999 | 0 | Yes | 100.000 | 49,999 |
+| Extended repair case | 1,000 | 489 | 489 | 0 | Yes | 99.978 | 490 |
+| Extended repair case | 100,000 | 49,989 | 49,989 | 0 | Yes | 100.000 | 49,990 |
 
 The CSV additionally reports `initial_bfd_batches` and `batches_saved`. The repair
 case improves from 500 to 499 batches at 1,000 items, and from 50,000 to 49,999 at
-100,000 items. Both reach their lower bound and are therefore proven optimal.
+100,000 items. The extended case improves from 490 to 489 at 1,000 items and
+from 49,990 to 49,989 at 100,000. All four repaired cases reach their lower bound
+and are therefore proven optimal.
 The other recorded inputs retain their original batch counts. Fill percentages
 are rounded to three decimal places.
 
@@ -146,8 +153,9 @@ even when packing is fast. JSON byte counts include the final platform newline.
 bin assignments on four known cases and 32 seeded small cases. The test oracle
 assigns each item to every feasible bin, pruning symmetric equal-load choices and
 branches that cannot improve the best count. It is limited to 16 items because
-the search is exponential. Production uses a different subset dynamic program
-and never invokes the test oracle.
+the search is exponential. Production never invokes the oracle. Its separately
+implemented subset dynamic program and bounded feasibility search are checked
+against the exact small-input results.
 
 These tests check that lower bounds do not exceed the exact minimum, feasible
 counts do not fall below it, and every proven-optimal claim matches it. In
@@ -159,19 +167,30 @@ particular:
 - Five magnitudes of GBP 340,000 need three batches, despite a volume lower bound
   of two. Whole-submission exact solving tightens the reported bound to three.
 
-A separate 1,000-item case still emits 490 batches when 489 suffice because an
-underfilled repair candidate exceeds the 18-item search budget. See the
-[requirements review](requirements-review.md#cost-minimisation-status). This
-remaining limitation is tested without falsely claiming a global optimum.
+The former 21-item-candidate limitation is now repaired: the extended case reaches
+489 batches at 1,000 items and 49,989 at 100,000. Tests also force a tiny search
+budget and verify that exhaustion retains the original packing without losing
+transactions or claiming a global optimum. The seeded random 100,000-item case
+remains unproven against its lower bound. See the
+[requirements review](requirements-review.md#cost-minimisation-status).
 
 ## Scaling limits
 
 Initial packing uses O(N log N) time and O(N) additional memory by construction.
 Repair uses O(K * 2^K) time and O(2^K) state space with K capped at 18, roughly
-3.25 MiB for state arrays at that limit. A large submission can invoke at most
-two such local searches, each on up to six underfilled batches; it never runs
-the exponential solver on the entire large window. Linear volume checks skip
-candidate sorting or exact search when the permitted group cannot reduce count.
+3.25 MiB for state arrays at that limit. Selected groups may contain up to 128
+items across six underfilled batches. Larger groups use bounded backtracking to
+try fitting into at most five target batches, with no more than 100,000 visited
+nodes per attempt. Search storage is linear in selected item/target counts, plus
+bounded recursion, rather than a subset array for 128 items. These are work
+bounds, not a wall-clock guarantee under arbitrary scheduling.
+
+A large submission receives at most two repair attempts in total. It never runs
+unbounded search on the entire large window. A linear pass retains the six
+lightest eligible totals; optimistic prefix sums avoid sorting candidates when
+no permitted group can eliminate a batch. Further volume checks avoid attempts
+whose selected totals cannot fit. A failed or budget-exhausted search preserves
+the initial valid packing.
 Collection
 uses O(N) snapshot copying when a window fills, inside the account operation.
 Packing and serialization run on the separate audit worker. A larger configured

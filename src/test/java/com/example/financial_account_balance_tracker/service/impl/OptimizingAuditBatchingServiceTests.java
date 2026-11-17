@@ -98,22 +98,26 @@ class OptimizingAuditBatchingServiceTests {
         assertPreserved(input, result.batches());
     }
 
-    @Test
-    void reportsAnUnprovenResultWhenTheUnderfilledCandidateExceedsTheExactSearchLimit() {
-        List<Transaction> transactions = new ArrayList<>();
-        for (int i = 0; i < 974; i++) {
-            transactions.add(new Transaction(new UUID(1, i), new BigDecimal("500000.00")));
-        }
-        transactions.addAll(submission("440000", "250000", "200000", "390000", "340000", "270000").transactions());
-        for (int i = 0; i < 20; i++) {
-            transactions.add(new Transaction(new UUID(2, i), new BigDecimal("200.00")));
-        }
-        AuditSubmission input = new AuditSubmission(1, transactions);
+    @ParameterizedTest
+    @ValueSource(ints = {1000, 100000})
+    void repairsTheLargerUnderfilledCandidateAndReachesTheGlobalBound(int size) {
+        AuditSubmission input = extendedCounterexample(size);
 
         var result = service.pack(input);
 
-        // A 21-item underfilled batch is skipped by the bounded solver. An exact
-        // global packing exists with 487 full pairs plus batches of 980,000 and 914,000.
+        assertThat(result.batches()).hasSize(size / 2 - 11);
+        assertThat(result.batchCountLowerBound()).isEqualTo(size / 2 - 11);
+        assertThat(result.optimalityProven()).isTrue();
+        assertPreserved(input, result.batches());
+    }
+
+    @Test
+    void exhaustedRepairBudgetRetainsTheOriginalPackingAndDoesNotClaimOptimality() {
+        AuditSubmission input = extendedCounterexample(1000);
+        OptimizingAuditBatchingService limited = new OptimizingAuditBatchingService(new BoundedBatchRepacker(0));
+
+        var result = limited.pack(input);
+
         assertThat(result.batches()).hasSize(490);
         assertThat(result.batchCountLowerBound()).isEqualTo(489);
         assertThat(result.optimalityProven()).isFalse();
@@ -148,6 +152,18 @@ class OptimizingAuditBatchingServiceTests {
         List<Transaction> transactions = new ArrayList<>();
         for (int i = 0; i < amounts.length; i++) {
             transactions.add(new Transaction(new UUID(0, i), new BigDecimal(amounts[i])));
+        }
+        return new AuditSubmission(1, transactions);
+    }
+
+    private static AuditSubmission extendedCounterexample(int size) {
+        List<Transaction> transactions = new ArrayList<>();
+        for (int i = 0; i < size - 26; i++) {
+            transactions.add(new Transaction(new UUID(1, i), new BigDecimal("500000.00")));
+        }
+        transactions.addAll(submission("440000", "250000", "200000", "390000", "340000", "270000").transactions());
+        for (int i = 0; i < 20; i++) {
+            transactions.add(new Transaction(new UUID(2, i), new BigDecimal("200.00")));
         }
         return new AuditSubmission(1, transactions);
     }

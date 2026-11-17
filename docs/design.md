@@ -140,25 +140,38 @@ total-volume bound and the number of items larger than half the capacity.
 Equality between the bound and the actual count proves optimality. Otherwise the
 result is unproven; this heuristic does not guarantee a global minimum. Known
 counterexamples and weak-bound cases are tested and described in the README.
-The default wrapper then improves results where its bounded exact search can do
+The default wrapper then improves results where its bounded repair can do
 so. Submissions with at most 18 transactions are solved in full, proving their
 minimum even when the initial bound was weak. Larger submissions receive at most
 two local repair passes: each selects up to six underfilled batches containing at
-most 18 transactions altogether, starting with the lowest totals. A batch that
+most 128 transactions altogether, starting with the lowest totals. A batch that
 would exceed that item budget is skipped. A volume check avoids searches that
 cannot possibly reduce the selected count. Before sorting candidates, a linear
-check also rules out repair when even six copies of the lightest eligible batch
-would exceed five batches of capacity.
+check retains the six lightest eligible totals. If even these optimistic prefixes
+of two through six batches cannot fit into one fewer batch, no permitted group
+can eliminate a batch.
 
 `SmallSetExactBatchPacker` stores the minimum bin count and lightest final-bin
 load for every subset, considering each possible final item. It retains parent
 choices and reconstructs the transaction order, then the exact batch assignments.
-Work is O(K * 2^K) time and O(2^K) space, with K capped at 18. Only strictly better
-local assignments replace initial batches. Every transaction occurrence is retained.
+Work is O(K * 2^K) time and O(2^K) space, with K capped at 18.
 
-The former 1,000-item cost counterexample now reaches 499 batches. Local exactness
+For selected sets of 19 to 128 items, `BoundedBatchRepacker` searches for a valid
+assignment into one fewer batch. It sorts magnitudes largest first and backtracks
+when an assignment prevents later items from fitting. Bins with equal current
+loads are symmetric, so only one such branch needs exploring. This search keeps
+every original transaction as an individual indexed item, including duplicates.
+
+Each attempt has a 100,000-node budget and at most five target bins. All search
+state is local to the call: load and assignment arrays, plus recursion of bounded
+depth. Work per node is bounded by the small target-bin count. There is no
+unbounded state cache or subset array for 128 items. A missing result leaves the
+initial packing intact and does not prove infeasibility; the budget may simply
+have expired. Only strictly better valid assignments replace initial batches.
+
+The former 1,000-item counterexamples now reach 499 and 489 batches respectively. Local exactness
 does not prove a global optimum: the global lower bound is preserved for larger
-submissions, and a separate bounded-search counterexample is still documented.
+submissions; fixed search limits can still leave opportunities unexplored.
 Solving the entire small submission can legitimately tighten that bound to its
 exact minimum. This distinction keeps the optimality flag meaningful.
 
@@ -235,13 +248,17 @@ construct a fresh implementation directly to isolate individual scenarios.
   inputs verify exact totals and preservation of all 1,000 or 100,000 transactions.
 - `service.impl.OptimizingAuditBatchingServiceTests` checks exact small solutions,
   duplicate occurrence preservation, the 18-item bound, non-increasing counts on
-  large inputs, conservative proof metadata and a remaining repair limitation.
+  large inputs, conservative proof metadata, both repaired counterexamples and
+  safe fallback when the bounded-search budget is exhausted.
+- `service.impl.BoundedBatchRepackerTests` checks backtracking, repeated
+  occurrences, capacity and combination infeasibility, the 128-item limit,
+  budget exhaustion and independent subsequent calls.
 - `service.impl.AuditPackingQualityTests` uses independent exhaustive bin assignments
   on four known cases and 32 seeded small cases. It checks that reported lower
   bounds never exceed the exact minimum and that the default small-input solver
   reaches that count. It also checks the repaired 1,000-item counterexample.
-  This test oracle uses a different strategy from production subset dynamic
-  programming, and is limited to small test inputs.
+  Its separate implementation also validates bounded feasibility results against
+  exact small-input minima. The oracle is limited to small test inputs.
 - `audit.JsonAuditSubmissionHandlerTests` parses the JSON contract and exercises
   console-write failures.
 - The application context test verifies that the application configuration loads.

@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AuditPerformanceScenario {
 
     private static final long SEED = 62831;
+    private static final long[] REPAIR_AMOUNTS = {44000000, 25000000, 20000000, 39000000, 34000000, 27000000};
     private static final long CAPACITY = AuditBatch.MAX_ABSOLUTE_VALUE.movePointRight(2).longValueExact();
     private final OptimizingAuditBatchingService service = new OptimizingAuditBatchingService();
     private final JsonMapper jsonMapper = JsonMapper.builder().build();
@@ -53,7 +54,7 @@ class AuditPerformanceScenario {
         StringBuilder report = new StringBuilder("scenario,transactions,pack_p50_ms,pack_p95_ms,pipeline_p50_ms,"
                 + "pipeline_p95_ms,batches,lower_bound,excess_over_bound,optimality_proven,fill_percent,"
                 + "initial_bfd_batches,batches_saved,arrival_next_fit_batches,json_bytes\n");
-        for (String scenario : List.of("uniform", "minimum_amount", "maximum_amount", "repair_case")) {
+        for (String scenario : List.of("uniform", "minimum_amount", "maximum_amount", "repair_case", "extended_repair_case")) {
             for (int size : new int[] {1000, 100000}) {
                 AuditSubmission input = input(scenario, size);
                 for (int warmup = 0; warmup < warmups; warmup++) {
@@ -175,7 +176,9 @@ class AuditPerformanceScenario {
                 case "minimum_amount" -> 20000;
                 case "maximum_amount" -> 50000000;
                 case "repair_case" -> i < size - 6 ? 50000000
-                        : new long[] {44000000, 25000000, 20000000, 39000000, 34000000, 27000000}[i - (size - 6)];
+                        : REPAIR_AMOUNTS[i - (size - 6)];
+                case "extended_repair_case" -> i < size - 26 ? 50000000
+                        : i < size - 20 ? REPAIR_AMOUNTS[i - (size - 26)] : 20000;
                 default -> throw new IllegalArgumentException("Unknown scenario: " + scenario);
             };
             transactions.add(new Transaction(new UUID(0, i), BigDecimal.valueOf(i % 2 == 0 ? pennies : -pennies, 2)));

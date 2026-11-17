@@ -52,27 +52,31 @@ class AuditConfigurationTests {
                 .containsExactly("{\"submission\":{\"batches\":[{\"totalValueOfAllTransactions\":200000.00,\"countOfTransactions\":1000}]}}");
     }
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(ints = {0, 20})
     @ExtendWith(OutputCaptureExtension.class)
-    void defaultPipelineRepairsTheKnownOneThousandTransactionCostGap(CapturedOutput output) {
+    void defaultPipelineRepairsTheKnownOneThousandTransactionCostGaps(int extraSmall, CapturedOutput output) {
         JsonMapper mapper = JsonMapper.builder().build();
         new ApplicationContextRunner()
                 .withBean(JsonMapper.class, () -> mapper)
                 .withUserConfiguration(AuditConfiguration.class)
                 .run(context -> {
                     TransactionAuditService collector = context.getBean(TransactionAuditService.class);
-                    for (int i = 0; i < 994; i++) {
+                    for (int i = 0; i < 994 - extraSmall; i++) {
                         collector.record(new Transaction(new UUID(0, i), new BigDecimal("500000.00")));
                     }
-                    int id = 994;
+                    int id = 994 - extraSmall;
                     for (String amount : List.of("440000", "250000", "200000", "390000", "340000", "270000")) {
                         collector.record(new Transaction(new UUID(0, id++), new BigDecimal(amount)));
+                    }
+                    for (int i = 0; i < extraSmall; i++) {
+                        collector.record(new Transaction(new UUID(0, id++), new BigDecimal("200.00")));
                     }
                 });
         List<String> documents = output.getOut().lines().filter(line -> line.startsWith("{\"submission\":")).toList();
         assertThat(documents).hasSize(1);
         var batches = mapper.readTree(documents.getFirst()).at("/submission/batches");
-        assertThat(batches.size()).isEqualTo(499);
+        assertThat(batches.size()).isEqualTo(499 - extraSmall / 2);
         int count = 0;
         for (var batch : batches) {
             count += batch.get("countOfTransactions").intValue();

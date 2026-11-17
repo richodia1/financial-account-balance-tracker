@@ -1,12 +1,12 @@
 # Requirements Review
 
 Review date: 17 November 2026. Initial review baseline: `00509fc`. Updated here
-for bounded exact repair and the associated correctness/performance checks.
+for exact small-set solving, bounded backtracking and the associated checks.
 
 The main processing, balance-enquiry and audit-output paths are implemented and
 tested. **A guaranteed minimum batch count remains an open requirement.** The
-default service repairs the original 500-to-499 case, but its bounded search can
-still miss the minimum on another valid 1,000-transaction window. Passing the test suite does not
+default service repairs both documented 1,000-item cost gaps, but its bounded
+search cannot guarantee a minimum for every possible input. Passing the test suite does not
 establish full compliance with a strict minimum-cost requirement.
 
 ## Behavior and evidence
@@ -29,7 +29,7 @@ or the matching package beneath `src/test/java`.
 | Exactly 1,000 transactions per default submission | Verified | Collector and dispatcher enforce complete windows; tests cover 999, 1,000, 1,001, multiple windows and shutdown with an incomplete window. |
 | One or more nonempty batches per submission | Verified | Packing retains actual transaction assignments in immutable batches; preservation tests cover repeated occurrences and large windows. |
 | Absolute value per batch at most GBP 1,000,000 | Verified | Integer-penny placement plus independent model validation. Opposite signs consume capacity; tests cover an exact fit and one penny over. |
-| Minimum number of batches | Partly resolved; global guarantee open | Exact small-set solving and bounded local repair fix the original default-window counterexample. Another bounded-search counterexample remains below. |
+| Minimum number of batches | Known gaps repaired; global guarantee open | Exact small-set solving and bounded local search fix both documented default-window counterexamples. Search limits can still leave opportunities unexplored. |
 | Console submission summary | Verified | `audit.JsonAuditSubmissionHandler` prints one valid JSON line per complete submission, with numeric totals in pounds and transaction counts. Contract tests parse the document. |
 | Demonstrate scaling to 100,000 transactions | Demonstrated locally | Functional tests and the opt-in performance scenario cover 100,000-item windows, including actual account-to-JSON processing. The performance report defines exclusions and measurement limits. |
 | Generic domain content | Checked | Domain code and project prose use generic account concepts and contain no actual customer, employer or individual names. Standard dependency names and upstream notices remain intact. |
@@ -62,10 +62,12 @@ output through the default collection and dispatch pipeline.
 
 Whole submissions of at most 18 items are solved exactly when the initial bound
 has not already proved optimality. Larger windows get at most two local passes,
-each considering up to six underfilled batches and 18 transactions in total.
+each considering up to six underfilled batches and 128 transactions in total.
+Sets of at most 18 use the exact subset solver; larger selected sets use
+backtracking with a 100,000-node budget and at most five target bins.
 An exact local solution does not tighten the global lower bound by itself.
 
-A remaining valid 1,000-item construction is:
+The second repaired 1,000-item construction is:
 
 - 974 items of magnitude GBP 500,000.
 - The same six remainder amounts listed above.
@@ -73,9 +75,20 @@ A remaining valid 1,000-item construction is:
 
 The first 974 items fill 487 batches. The remainder can fit into batches of
 GBP 980,000 and GBP 914,000, giving an exact minimum of **489 batches**. The
-bounded strategy emits **490**: one underfilled batch has 21 transactions and is
-therefore outside the exact-search budget. It correctly reports optimality as
-unproven. `OptimizingAuditBatchingServiceTests` keeps this limitation explicit.
+earlier 18-item strategy emitted **490** because an underfilled batch had 21
+transactions. The bounded repacker now finds a valid two-batch remainder
+assignment and reaches **489**, proving optimality by the global volume bound.
+Its 100,000-item version similarly improves from 49,990 to **49,989**.
+
+Both outcomes are regression-tested through the default service; default
+collection-to-JSON configuration tests also cover the two 1,000-item cases.
+If the bounded search exhausts its budget, the original valid packing is retained
+and the optimality flag stays conservative. A deterministic test forces this
+fallback and verifies that no transaction occurrence is lost.
+
+The seeded random 100,000-item case still has an unproven result: the current
+packing has 24,970 batches against a lower bound of 24,969. No minimum is claimed
+there. The item, group, pass and node limits prevent exhaustive global search.
 
 The implementation now reduces the known cost gap without unbounded exponential
 work. An exact global optimizer is still required to guarantee a minimum for
@@ -108,19 +121,19 @@ delivery, real-time scheduling or global-optimization guarantees.
 ## Validation record
 
 The initial review exposed the original cost gap. Validation after adding exact
-small-set solving and bounded local repair:
+small-set solving and bounded backtracking:
 
 - Java 21 clean verification and follow-up verification completed successfully:
-  114 tests, no failures,
+  127 tests, no failures,
   errors or skips, and an executable JAR produced.
-- The default configured pipeline regression produced 499 batches for the
-  repaired 1,000-item case, preserving the complete submission count.
+- Default configured pipeline regressions produced 499 and 489 batches for the
+  two repaired 1,000-item cases, preserving each complete submission count.
 - The rebuilt packaged JAR ran with normal producer and audit settings on a
   random local port. Its observed JSON submission contained exactly 1,000
-  transactions in 251 batches, all within the absolute-value limit. The balance
+  transactions in 255 batches, all within the absolute-value limit. The balance
   API returned HTTP 200 with GBP currency, and the owned process shut down cleanly.
   Random generation makes that observed batch count illustrative, not repeatable.
-- All eight opt-in performance scenarios completed with a 512 MiB maximum heap,
+- All ten opt-in performance scenarios completed with a 512 MiB maximum heap,
   including repaired cases at 1,000 and 100,000 transactions. Current CSV results
   match the generated measurement artifacts.
 - Real-server regression tests cover JSON balance responses, exact decimal

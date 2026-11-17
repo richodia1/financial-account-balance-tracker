@@ -11,7 +11,7 @@ balance endpoint. Dedicated credit and debit producers run automatically. Accept
 transactions are collected into complete audit windows and handed to a dedicated
 worker. The worker packs those transactions into batches capped at GBP 1,000,000
 of absolute value and prints a JSON summary. Packing starts with best-fit decreasing
-and applies bounded exact repair. A lower-bound diagnostic distinguishes proven
+and combines exact small-set solving with bounded repair. A lower-bound diagnostic distinguishes proven
 optimal results from heuristic results. An opt-in performance demonstration measures packing and the
 account-to-JSON pipeline for 1,000- and 100,000-transaction submissions. See the
 [performance and packing-quality report](docs/performance.md) for results and
@@ -58,6 +58,7 @@ service/
     TransactionAuditService.java
     impl/
         BestFitDecreasingAuditBatchingService.java
+        BoundedBatchRepacker.java
         InMemoryBankAccountService.java
         InMemoryTransactionAuditService.java
         OptimizingAuditBatchingService.java
@@ -165,8 +166,9 @@ inputs verify that each transaction and the exact absolute total are preserved.
 Output tests parse the JSON document and exercise console-write failure handling;
 a configuration test runs the default collection-to-JSON pipeline.
 Additional quality tests compare small inputs against an independent exhaustive
-assignment solver. Tests cover exact repair, the 18-transaction limit, the repaired
-1,000-item cost counterexample and a remaining bounded-search limitation.
+assignment solver. Tests cover exact repair, the 18-item subset limit, the
+128-item bounded-search limit, search-budget fallback and both repaired
+1,000-item cost counterexamples.
 
 ### Run the performance demonstration
 
@@ -321,16 +323,28 @@ optimal and repair is skipped. Otherwise:
 1. Submissions of at most 18 transactions are solved exactly by subset dynamic
    programming. This proves their minimum and can tighten a weak lower bound.
 2. Larger submissions may receive two repair passes. Each pass selects up to six
-   underfilled batches containing at most 18 transactions in total, prioritizing
-   the lowest totals. An exact solve is attempted only when the selected volume
-   could fit into fewer batches. Replacement happens only if it reduces count.
+   underfilled batches containing at most 128 transactions in total, prioritizing
+   the lowest totals. A volume check first tests whether fewer batches are
+   possible. Selected sets of at most 18 items use the exact subset solver;
+   larger sets use bounded backtracking to try fitting into one fewer batch.
+   Replacement happens only when a valid reduction has been found.
 
-A linear volume check skips candidate sorting when no group within the six-batch
-limit can eliminate a batch.
+A linear check retains the six lightest eligible totals. If no prefix of two
+through six can fit into one fewer batch, no permitted group can do so, and
+candidate sorting is skipped.
 
 `SmallSetExactBatchPacker` takes O(K * 2^K) time and O(2^K) space, with K at most
-18. Its state arrays use roughly 3.25 MiB at that limit. These fixed bounds keep
-exponential work away from the complete 1,000- or 100,000-item submission.
+18. Its state arrays use roughly 3.25 MiB at that limit.
+`BoundedBatchRepacker` sorts up to 128 individual transactions largest first,
+then explores assignments to at most five target batches. Equal-load bins are
+interchangeable and are skipped to avoid symmetric branches. Each attempt visits
+at most 100,000 search nodes; depth is at most 128 items plus the completion call.
+The limits bound computational work, not elapsed time under arbitrary scheduling.
+No transaction aggregation or synthetic replacement transactions are used.
+
+These fixed bounds keep unbounded exponential work away from the complete
+1,000- or 100,000-item submission. A failed or exhausted search retains the valid
+initial packing. Exhaustion is not treated as proof that the target is infeasible.
 Local repair preserves every transaction occurrence and cannot increase the
 initial count. It does not turn a local optimum into a global proof: larger
 submissions keep the original global lower bound.
@@ -341,12 +355,17 @@ with 994 transactions of magnitude GBP 500,000, improves from 500 to **499 batch
 Five GBP 340,000 items are also solved exactly: the returned lower bound is
 tightened from two to their actual minimum of three.
 
-Large inputs remain heuristic whenever the global bound is not reached. Batches
-with more than 18 transactions are skipped by repair. A valid remaining
-1,000-item case uses 490 batches when 489 suffice; the
-[requirements review](docs/requirements-review.md#cost-minimisation-status) gives
-the construction. A false optimality flag means unproven, rather than necessarily
-suboptimal, because global bounds can still be weak.
+The former 21-item-candidate limitation is repaired too: 974 items of magnitude
+GBP 500,000, the six remainder amounts, and 20 items of magnitude GBP 200 now use
+the proven minimum of **489 batches**, instead of 490. Its 100,000-item version
+uses **49,989**, instead of 49,990.
+
+Large inputs remain heuristic whenever the global bound is not reached. More
+than 128 selected items, the six-batch group limit, two repair passes and search
+budget exhaustion can leave opportunities unexplored. The
+[requirements review](docs/requirements-review.md#cost-minimisation-status) records
+the scope of the guarantees. A false optimality flag means unproven, rather than
+necessarily suboptimal, because global bounds can also be weak.
 
 The algorithm targets fast, low-cost packing for large windows. If a guaranteed
 minimum for every input is mandatory, this implementation needs an exact
