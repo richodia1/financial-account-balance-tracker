@@ -5,11 +5,10 @@ transaction audit batches.
 
 ## Current status
 
-The application builds, tests and starts as an HTTP service. An immutable
-transaction model and a thread-safe, in-memory balance service are implemented.
-The REST balance endpoint, transaction producers and audit batching are the next
-implementation stages. There are no application endpoints yet, and processed
-transactions are not yet retained for audit.
+The application builds, tests and starts as an HTTP service. It implements an
+immutable transaction model, a thread-safe in-memory balance service and a REST
+balance endpoint. Transaction producers and audit batching are the next
+implementation stages; processed transactions are not yet retained for audit.
 
 ## Balance model
 
@@ -21,7 +20,7 @@ transactions are not yet retained for audit.
   decimal strings or whole-pence values rather than binary floating-point input.
 - `BankAccountService` retains `processTransaction(Transaction)` and
   `double retrieveBalance()`. Its additional `retrieveExactBalance()` method
-  preserves decimal precision for callers, including the future REST endpoint.
+  preserves decimal precision for callers, including the REST endpoint.
 - `InMemoryBankAccountService` starts at GBP 0.00 and uses exact `BigDecimal`
   addition. The required `double` method converts only the returned snapshot;
   floating-point values are never used to accumulate the balance.
@@ -69,8 +68,11 @@ From the repository root:
 This runs the automated tests and creates the executable application JAR in
 `target/`. Tests cover transaction validation, signed amounts, exact penny
 calculations, negative balances, immutable balance snapshots and concurrent
-credits, debits and enquiries. A context-loading test verifies that the application
-can initialize its configuration without an external database.
+credits, debits and enquiries. HTTP integration tests start a real server on a
+random available port and exercise the endpoint against the real account service.
+They verify JSON decimal precision, live balance updates, read-only enquiries,
+cache-control headers and unsupported requests. A context-loading test verifies
+that the application can initialize its configuration without an external database.
 
 ## Run
 
@@ -78,8 +80,14 @@ can initialize its configuration without an external database.
 java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar
 ```
 
-The HTTP server listens on port 8080 by default. Stop it with Ctrl+C. Until the
-balance endpoint is implemented, requests return HTTP 404.
+The HTTP server listens on port 8081 by default. Stop it with Ctrl+C.
+
+If that port is occupied, choose another port with the `SERVER_PORT` environment
+variable or a command-line argument, for example:
+
+```sh
+java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar --server.port=8082
+```
 
 Alternatively, run directly from source:
 
@@ -89,6 +97,34 @@ Alternatively, run directly from source:
 
 On Windows, use `mvnw.cmd` instead of `./mvnw` and set `JAVA_HOME` to a JDK 21
 installation.
+
+## Balance API
+
+Retrieve the current balance:
+
+```sh
+curl -i http://localhost:8081/api/balance
+```
+
+A fresh application returns HTTP 200 with `Content-Type: application/json`,
+`Cache-Control: no-store` and this body:
+
+```json
+{"balance":0.00,"currency":"GBP"}
+```
+
+`balance` is a JSON number in pounds, serialized directly from the exact decimal
+snapshot. Each request reads the shared account service without modifying it.
+The no-store directive asks clients and intermediaries not to retain stale balance
+responses. Concurrent transactions may change the balance after a snapshot is read.
+
+POST requests return HTTP 405. A request that only accepts HTML returns HTTP 406.
+The root path `/` has no application endpoint and returns HTTP 404.
+
+The transaction producers are not implemented yet, so a fresh application stays
+at zero until transactions are processed through the Java service. The HTTP
+integration tests apply credits and debits directly to that service before
+verifying the resulting responses.
 
 ## Dependency choices
 
