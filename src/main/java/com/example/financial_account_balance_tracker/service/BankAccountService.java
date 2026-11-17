@@ -1,6 +1,6 @@
 package com.example.financial_account_balance_tracker.service;
 
-import com.example.financial_account_balance_tracker.domain.Transaction;
+import com.example.financial_account_balance_tracker.model.Transaction;
 
 import java.math.BigDecimal;
 

@@ -1,6 +1,7 @@
-package com.example.financial_account_balance_tracker.service;
+package com.example.financial_account_balance_tracker.service.impl;
 
-import com.example.financial_account_balance_tracker.domain.Transaction;
+import com.example.financial_account_balance_tracker.model.Transaction;
+import com.example.financial_account_balance_tracker.service.BankAccountService;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
