@@ -1,5 +1,6 @@
-package com.example.financial_account_balance_tracker.domain;
+package com.example.financial_account_balance_tracker.model;
 
+import com.example.financial_account_balance_tracker.enums.TransactionType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -17,17 +18,19 @@ class TransactionTests {
 
     @ParameterizedTest
     @CsvSource({
-            "200, 200.00",
-            "200.1, 200.10",
-            "-500000, -500000.00",
-            "0.01, 0.01",
-            "-0.01, -0.01",
-            "200.000, 200.00"
+            "200, 200.00, CREDIT",
+            "200.1, 200.10, CREDIT",
+            "-500000, -500000.00, DEBIT",
+            "0.01, 0.01, CREDIT",
+            "-0.01, -0.01, DEBIT",
+            "200.000, 200.00, CREDIT"
     })
-    void preservesSignedValueAndNormalizesToPence(String amount, String expected) {
+    void preservesSignedValueAndIdentifiesTransactionType(
+            String amount, String expected, TransactionType expectedType) {
         Transaction transaction = new Transaction(ID, new BigDecimal(amount));
 
         assertEquals(new BigDecimal(expected), transaction.amount());
+        assertEquals(expectedType, transaction.type());
     }
 
     @ParameterizedTest

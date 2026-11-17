@@ -10,11 +10,46 @@ immutable transaction model, a thread-safe in-memory balance service and a REST
 balance endpoint. Transaction producers and audit batching are the next
 implementation stages; processed transactions are not yet retained for audit.
 
+## Package organization
+
+All application packages sit beneath `com.example.financial_account_balance_tracker`:
+
+```text
+FinancialAccountBalanceTrackerApplication.java
+controller/
+    BalanceController.java
+dto/
+    BalanceResponse.java
+enums/
+    TransactionType.java
+model/
+    Transaction.java
+service/
+    BankAccountService.java
+    impl/
+        InMemoryBankAccountService.java
+```
+
+| Package | Responsibility |
+| --- | --- |
+| `controller` | HTTP routing, response status, headers and response assembly. |
+| `dto` | Data transferred across the HTTP boundary. |
+| `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
+| `model` | Internal business data and its invariants, including valid signed amounts. |
+| `service` | The account-processing and balance-enquiry contract. |
+| `service.impl` | The in-memory implementation, exact arithmetic and synchronization. |
+
+Tests mirror these packages under `src/test/java`. See the
+[design walkthrough](docs/design.md) for the request flow, transaction flow and
+the reasoning behind the boundaries.
+
 ## Balance model
 
 - `Transaction` contains a UUID and a signed GBP amount. Credits are positive;
   debits are negative. IDs and amounts must be present, and zero-value
   transactions are rejected.
+- `Transaction.type()` derives `TransactionType.CREDIT` or `TransactionType.DEBIT`
+  from the amount's sign. The type is not stored separately from the amount.
 - Amounts are normalized to two decimal places. Fractional pennies are rejected
   instead of rounded silently. Decimal amounts should be constructed from
   decimal strings or whole-pence values rather than binary floating-point input.

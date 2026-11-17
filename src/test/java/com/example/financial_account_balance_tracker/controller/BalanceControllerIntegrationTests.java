@@ -1,6 +1,6 @@
-package com.example.financial_account_balance_tracker.api;
+package com.example.financial_account_balance_tracker.controller;
 
-import com.example.financial_account_balance_tracker.domain.Transaction;
+import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-class BalanceApiTests {
+class BalanceControllerIntegrationTests {
 
     @LocalServerPort
     private int port;

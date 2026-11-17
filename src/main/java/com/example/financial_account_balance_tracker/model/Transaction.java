@@ -1,4 +1,6 @@
-package com.example.financial_account_balance_tracker.domain;
+package com.example.financial_account_balance_tracker.model;
+
+import com.example.financial_account_balance_tracker.enums.TransactionType;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -25,5 +27,12 @@ public record Transaction(UUID id, BigDecimal amount) {
         if (amount.signum() == 0) {
             throw new IllegalArgumentException("Transaction amount must not be zero");
         }
+    }
+
+    /**
+     * Derives the type from the signed amount so the two cannot contradict.
+     */
+    public TransactionType type() {
+        return amount.signum() > 0 ? TransactionType.CREDIT : TransactionType.DEBIT;
     }
 }
