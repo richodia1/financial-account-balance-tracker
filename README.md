@@ -78,8 +78,15 @@ can initialize its configuration without an external database.
 java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar
 ```
 
-The HTTP server listens on port 8080 by default. Stop it with Ctrl+C. Until the
+The HTTP server listens on port 8081 by default. Stop it with Ctrl+C. Until the
 balance endpoint is implemented, requests return HTTP 404.
+
+If that port is occupied, choose another port with the `SERVER_PORT` environment
+variable or a command-line argument, for example:
+
+```sh
+java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar --server.port=8082
+```
 
 Alternatively, run directly from source:
 
