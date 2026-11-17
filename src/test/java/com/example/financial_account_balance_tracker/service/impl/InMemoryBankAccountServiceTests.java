@@ -1,6 +1,7 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
 import com.example.financial_account_balance_tracker.model.Transaction;
+import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -11,6 +12,10 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,7 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class InMemoryBankAccountServiceTests {
 
-    private final BankAccountService service = new InMemoryBankAccountService();
+    private final List<AuditSubmission> submissions = new ArrayList<>();
+    private final InMemoryTransactionAuditService auditService =
+            new InMemoryTransactionAuditService(1000, submissions::add);
+    private final BankAccountService service = new InMemoryBankAccountService(auditService);
 
     @Test
     void startsWithZeroBalance() {
@@ -82,6 +90,33 @@ class InMemoryBankAccountServiceTests {
     }
 
     @Test
+    void rejectedAuditHandoffLeavesBalanceAndPartialWindowUnchanged() {
+        AtomicBoolean accept = new AtomicBoolean(false);
+        List<AuditSubmission> accepted = new ArrayList<>();
+        InMemoryTransactionAuditService collector = new InMemoryTransactionAuditService(2, submission -> {
+            if (!accept.get()) {
+                throw new RejectedExecutionException("Audit queue full");
+            }
+            accepted.add(submission);
+        });
+        BankAccountService account = new InMemoryBankAccountService(collector);
+        account.processTransaction(transaction(1, "200.00"));
+
+        assertThrows(RejectedExecutionException.class,
+                () -> account.processTransaction(transaction(2, "-50.00")));
+        assertEquals(new BigDecimal("200.00"), account.retrieveExactBalance());
+        assertEquals(1, collector.pendingTransactionCount());
+        assertTrue(accepted.isEmpty());
+
+        accept.set(true);
+        account.processTransaction(transaction(2, "-50.00"));
+        assertEquals(new BigDecimal("150.00"), account.retrieveExactBalance());
+        assertEquals(1, accepted.size());
+        assertEquals(1, accepted.get(0).sequence());
+        assertEquals(0, collector.pendingTransactionCount());
+    }
+
+    @Test
     void handlesConcurrentCreditsDebitsAndBalanceEnquiriesWithoutLosingUpdates() throws Exception {
         int workerCount = 8;
         int transactionsPerWorker = 1000;
@@ -125,6 +160,16 @@ class InMemoryBankAccountServiceTests {
             assertAll(
                     () -> assertEquals(new BigDecimal("80.00"), service.retrieveExactBalance()),
                     () -> assertEquals(80.0, service.retrieveBalance()));
+            assertEquals(8, submissions.size());
+            Set<UUID> ids = new HashSet<>();
+            for (int i = 0; i < submissions.size(); i++) {
+                AuditSubmission submission = submissions.get(i);
+                assertEquals(i + 1, submission.sequence());
+                assertEquals(1000, submission.transactions().size());
+                submission.transactions().forEach(transaction -> assertTrue(ids.add(transaction.id())));
+            }
+            assertEquals(8000, ids.size());
+            assertEquals(0, auditService.pendingTransactionCount());
         } finally {
             start.countDown();
             executor.shutdownNow();

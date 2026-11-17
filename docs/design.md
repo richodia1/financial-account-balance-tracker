@@ -7,6 +7,9 @@ component scanning beneath its base package. The controller and service
 implementation are discovered through their framework annotations.
 `ProducerConfiguration` wires the random transaction factory and lifecycle-managed
 producer when `tracker.producer.enabled` is true or unspecified.
+`AuditConfiguration` creates the collector, bounded dispatcher and downstream
+handler. The dispatcher's lifecycle phase starts it before the producers and
+stops it after producer shutdown.
 
 ## Follow a balance enquiry
 
@@ -45,8 +48,10 @@ pennies. Amounts are normalized to two decimal places without rounding.
 `Transaction.type()` derives the classification from the amount's sign, keeping
 the type consistent with the amount.
 
-`BankAccountService.processTransaction` accepts a transaction. The implementation
-adds its signed amount to the existing balance inside a synchronized method.
+`BankAccountService.processTransaction` accepts a transaction. Inside a
+synchronized method, the implementation calculates the next balance, records the
+transaction with `TransactionAuditService`, then commits the balance. A rejected
+audit hand-off leaves the balance unchanged.
 The producers call this interface; they do not perform balance calculations
 themselves.
 
@@ -72,6 +77,38 @@ join itself.
 The configuration flag can remove the producer beans entirely. This keeps manual
 balance checks and HTTP tests deterministic while allowing the normal application
 to generate transactions automatically.
+
+## Follow audit collection
+
+```mermaid
+flowchart LR
+    Account["InMemoryBankAccountService"] --> Collector["TransactionAuditService"]
+    Collector --> Window["Immutable AuditSubmission: 1000 transactions"]
+    Window --> Queue["Bounded queue"]
+    Queue --> Worker["audit-dispatcher thread"]
+    Worker --> Handler["AuditSubmissionHandler"]
+```
+
+The collector keeps a partial window until the next transaction completes it.
+It creates a defensive, immutable snapshot and offers it to the bounded queue.
+Only a successful hand-off clears the partial window and advances the sequence.
+This lets the account service reject a completing transaction without changing
+its balance when the queue cannot accept the submission.
+
+The queue hand-off does not wait for downstream work. Snapshot creation remains
+inside the short transaction operation and costs O(N) at each window boundary.
+The dedicated worker processes complete windows in FIFO order outside balance
+locks. A slow handler therefore does not hold up balance enquiries.
+
+On a handler failure, the dispatcher retains the failed in-flight submission and
+the queued windows, logs the error and rejects new complete windows. There is no
+automatic downstream retry. On normal shutdown, producers stop first and the
+audit worker drains completed windows. Partial windows are not emitted because
+they would violate the configured transaction count.
+
+The current handler logs the collection count. Packing transactions into
+value-limited batches is a separate upcoming stage behind the same handler
+contract.
 
 ## Explain money precision
 
@@ -115,9 +152,18 @@ construct a fresh implementation directly to isolate individual scenarios.
   wall-clock transaction counts.
 - `config.ProducerConfigurationTests` checks conditional activation, automatic
   startup and shutdown when the application context closes.
+- `model.AuditSubmissionTests` checks immutable snapshots and basic invariants.
+- `service.impl.InMemoryTransactionAuditServiceTests` checks the exact window
+  boundaries, disjoint ordered windows, hand-off rejection and 100,000-item windows.
+- `audit.AsyncAuditDispatcherTests` checks FIFO processing, separate worker
+  execution, bounded queue rejection, draining and retained failure state.
+- `config.AuditConfigurationTests` checks the default 1,000-item configuration,
+  partial-window handling, invalid settings and account responsiveness with a
+  deliberately slow downstream handler.
 - The application context test verifies that the application configuration loads.
 
 ## Keep the current limits visible
 
-The state is in memory and is lost on restart. Audit collection and batching are
-upcoming stages; processed transactions are not yet retained for audit.
+The balance, partial window, queued submissions and any failed in-flight work are
+in memory and are lost on restart. Batch packing and final batch-summary output
+are upcoming stages; a collected window is not yet a value-limited audit batch.

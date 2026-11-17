@@ -8,3 +8,6 @@ server:
 tracker:
   producer:
     enabled: true
+  audit:
+    submission-size: 1000
+    queue-capacity: 4

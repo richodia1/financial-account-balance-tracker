@@ -7,8 +7,10 @@ transaction audit batches.
 
 The application builds, tests and starts as an HTTP service. It implements an
 immutable transaction model, a thread-safe in-memory balance service and a REST
-balance endpoint. Dedicated credit and debit producers run automatically. Audit
-batching is the next stage; processed transactions are not yet retained for audit.
+balance endpoint. Dedicated credit and debit producers run automatically. Accepted
+transactions are collected into complete audit windows and handed to a dedicated
+worker. Value-limited batch packing and the final batch-summary output are the
+next stage.
 
 ## Package organization
 
@@ -16,7 +18,11 @@ All application packages sit beneath `com.example.financial_account_balance_trac
 
 ```text
 FinancialAccountBalanceTrackerApplication.java
+audit/
+    AsyncAuditDispatcher.java
+    AuditSubmissionHandler.java
 config/
+    AuditConfiguration.java
     ProducerConfiguration.java
 controller/
     BalanceController.java
@@ -25,19 +31,23 @@ dto/
 enums/
     TransactionType.java
 model/
+    AuditSubmission.java
     Transaction.java
 producer/
     RandomTransactionFactory.java
     TransactionProducer.java
 service/
     BankAccountService.java
+    TransactionAuditService.java
     impl/
         InMemoryBankAccountService.java
+        InMemoryTransactionAuditService.java
 ```
 
 | Package | Responsibility |
 | --- | --- |
-| `config` | Component wiring and conditional activation of the producers. |
+| `audit` | Bounded hand-off, background processing and the downstream handler contract. |
+| `config` | Component wiring, producer activation and audit window/queue configuration. |
 | `controller` | HTTP routing, response status, headers and response assembly. |
 | `dto` | Data transferred across the HTTP boundary. |
 | `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
@@ -69,6 +79,9 @@ the reasoning behind the boundaries.
 - Balance updates and exact reads synchronize on the same service instance.
   Each operation takes effect atomically, with updates visible to subsequent
   readers. The framework creates one service instance by default.
+- Processing prepares the next balance, records the transaction for audit, then
+  commits that balance. A rejected completed-window hand-off leaves the balance
+  and the existing partial audit window unchanged.
 - Debits may take the balance below zero. No overdraft restriction is applied.
   Each processing call applies its transaction; IDs are not deduplication keys.
 - The producer enforces the GBP 200 to GBP 500,000 generation range. The
@@ -119,6 +132,12 @@ Producer tests cover inclusive amount boundaries, signed generation, the 40 ms
 scheduling period, dedicated worker threads, shutdown and failure handling.
 Configuration tests cover enabled and disabled generation. Balance API tests
 disable automatic generation so their account state stays deterministic.
+Audit tests cover the 999/1000/1001 boundaries, immutable snapshots, ordered
+windows, rejected hand-offs, bounded queues and worker failure retention. The
+concurrent account test verifies that all 8,000 accepted transactions appear
+exactly once across eight submissions. A functional test also collects a
+100,000-transaction window. A configured integration test verifies that a slow
+audit handler does not block account processing or balance enquiries.
 
 ## Run
 
@@ -176,6 +195,43 @@ java -jar target/financial-account-balance-tracker-0.0.1-SNAPSHOT.jar --tracker.
 | --- | --- | --- |
 | `server.port` | `8081` | HTTP listener port. |
 | `tracker.producer.enabled` | `true` | Automatically create and start both producers. |
+| `tracker.audit.submission-size` | `1000` | Transactions per complete audit window; use `100000` for the larger-window scenario. |
+| `tracker.audit.queue-capacity` | `4` | Maximum completed submissions waiting for the audit worker. |
+
+## Audit collection
+
+Every 1,000 accepted transactions form one immutable `AuditSubmission`. Windows
+are disjoint and preserve processing order. At 999 transactions there is no
+complete submission; transaction 1,000 completes the first window, and transaction
+1,001 starts the next one. An incomplete window is never emitted on shutdown.
+
+`InMemoryTransactionAuditService` captures a complete window and hands it to
+`AsyncAuditDispatcher`. The hand-off uses a bounded queue's `offer` operation:
+it does not wait for queue capacity or downstream processing. Snapshot creation
+still takes O(N) time at the window boundary. The audit handler runs on the
+separate `audit-dispatcher` thread, outside the account's balance lock.
+
+If the queue is full, the completing transaction is rejected before its balance
+change is committed, and the partial window is preserved for a possible retry.
+The producers' processing-failure policy then stops both generators. A handler
+failure retains its in-flight submission and the queued submissions in memory;
+new complete windows are rejected, with no automatic downstream retry.
+
+The dispatcher starts before the producers and stops after them. Normal shutdown
+drains completed submissions. Its memory use is bounded by the partial window,
+four queued windows by default, and one in-flight window. All of this state is
+in memory and is lost on application restart.
+
+The current handler reports collection only. At the target generation rate,
+the first message should appear after roughly 20 seconds:
+
+```text
+Collected audit submission 1 containing 1000 transactions
+```
+
+The next stage will replace this collection diagnostic with value-limited batch
+packing and the required batch-summary output. This stage does not yet choose
+batches or claim to minimize their number.
 
 ## Balance API
 
@@ -229,3 +285,4 @@ Reference documentation:
 - [Synchronization and memory visibility](https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html#jls-17.4.5)
 - [Periodic scheduling](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ScheduledExecutorService.html)
 - [Application lifecycle](https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/context/SmartLifecycle.html)
+- [Bounded queue hand-off](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/BlockingQueue.html)
