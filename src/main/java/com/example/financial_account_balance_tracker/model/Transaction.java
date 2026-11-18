@@ -1,10 +1,10 @@
 package com.example.financial_account_balance_tracker.model;
 
 import com.example.financial_account_balance_tracker.enums.TransactionType;
+import com.example.financial_account_balance_tracker.exception.InvalidTransactionException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -14,18 +14,22 @@ import java.util.UUID;
 public record Transaction(UUID id, BigDecimal amount) {
 
     public Transaction {
-        Objects.requireNonNull(id, "Transaction ID must not be null");
-        Objects.requireNonNull(amount, "Transaction amount must not be null");
+        if (id == null) {
+            throw new InvalidTransactionException("Transaction ID must not be null");
+        }
+        if (amount == null) {
+            throw new InvalidTransactionException("Transaction amount must not be null");
+        }
 
         try {
             amount = amount.setScale(2, RoundingMode.UNNECESSARY);
         } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException(
+            throw new InvalidTransactionException(
                     "Transaction amount must be representable in whole pence", exception);
         }
 
         if (amount.signum() == 0) {
-            throw new IllegalArgumentException("Transaction amount must not be zero");
+            throw new InvalidTransactionException("Transaction amount must not be zero");
         }
     }
 

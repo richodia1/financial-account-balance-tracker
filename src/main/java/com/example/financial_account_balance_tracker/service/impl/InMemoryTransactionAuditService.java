@@ -1,5 +1,7 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.AuditUnavailableException;
+import com.example.financial_account_balance_tracker.exception.InvalidTransactionException;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.TransactionAuditService;
@@ -7,6 +9,7 @@ import com.example.financial_account_balance_tracker.service.TransactionAuditSer
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 
 /**
@@ -31,7 +34,9 @@ public final class InMemoryTransactionAuditService implements TransactionAuditSe
 
     @Override
     public synchronized void record(Transaction transaction) {
-        Objects.requireNonNull(transaction, "Transaction must not be null");
+        if (transaction == null) {
+            throw new InvalidTransactionException("Transaction must not be null");
+        }
         if (pending.size() + 1 < submissionSize) {
             pending.add(transaction);
             return;
@@ -42,7 +47,13 @@ public final class InMemoryTransactionAuditService implements TransactionAuditSe
         complete.add(transaction);
         AuditSubmission submission = new AuditSubmission(nextSequence, complete);
         long followingSequence = Math.incrementExact(nextSequence);
-        publisher.accept(submission);
+        try {
+            publisher.accept(submission);
+        } catch (AuditUnavailableException exception) {
+            throw exception;
+        } catch (RejectedExecutionException exception) {
+            throw new AuditUnavailableException("Audit submission could not be accepted", exception);
+        }
         // Commit the window only after the non-blocking hand-off succeeds.
         pending.clear();
         nextSequence = followingSequence;

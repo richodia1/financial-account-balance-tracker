@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import com.example.financial_account_balance_tracker.model.AuditBatch;
 import com.example.financial_account_balance_tracker.model.AuditBatchingResult;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
@@ -17,8 +18,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
-import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 class BestFitDecreasingAuditBatchingServiceTests {
 
@@ -126,7 +127,7 @@ class BestFitDecreasingAuditBatchingServiceTests {
 
     @Test
     void rejectsAMissingSubmission() {
-        assertThatNullPointerException().isThrownBy(() -> service.pack(null));
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> service.pack(null));
     }
 
     @ParameterizedTest

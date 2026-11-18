@@ -1,5 +1,7 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.AuditUnavailableException;
+import com.example.financial_account_balance_tracker.exception.InvalidTransactionException;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.model.Transaction;
 import org.junit.jupiter.api.Test;
@@ -14,6 +16,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -66,16 +69,17 @@ class InMemoryTransactionAuditServiceTests {
     void rejectedHandoffCanBeRetriedWithoutLosingThePartialWindowOrSequence() {
         AtomicBoolean accept = new AtomicBoolean(false);
         List<AuditSubmission> submissions = new ArrayList<>();
+        RejectedExecutionException cause = new RejectedExecutionException("Queue full");
         InMemoryTransactionAuditService collector = new InMemoryTransactionAuditService(3, submission -> {
             if (!accept.get()) {
-                throw new RejectedExecutionException("Queue full");
+                throw cause;
             }
             submissions.add(submission);
         });
         collector.record(transaction(1));
         collector.record(transaction(2));
 
-        assertThrows(RejectedExecutionException.class, () -> collector.record(transaction(3)));
+        assertSame(cause, assertThrows(AuditUnavailableException.class, () -> collector.record(transaction(3))).getCause());
         assertEquals(2, collector.pendingTransactionCount());
         assertTrue(submissions.isEmpty());
 
@@ -105,7 +109,7 @@ class InMemoryTransactionAuditServiceTests {
         InMemoryTransactionAuditService collector = new InMemoryTransactionAuditService(1000, submission -> {});
         collector.record(transaction(1));
 
-        assertThrows(NullPointerException.class, () -> collector.record(null));
+        assertThrows(InvalidTransactionException.class, () -> collector.record(null));
         assertEquals(1, collector.pendingTransactionCount());
     }
 

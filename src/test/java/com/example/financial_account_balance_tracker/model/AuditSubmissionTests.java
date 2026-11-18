@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.model;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -30,16 +31,23 @@ class AuditSubmissionTests {
     @ValueSource(longs = {0, -1})
     void requiresAPositiveSequence(long sequence) {
         Transaction transaction = new Transaction(new UUID(0, 1), new BigDecimal("200.00"));
-        assertThrows(IllegalArgumentException.class, () -> new AuditSubmission(sequence, List.of(transaction)));
+        assertThrows(InvalidAuditSubmissionException.class, () -> new AuditSubmission(sequence, List.of(transaction)));
     }
 
     @Test
     void rejectsEmptySubmissions() {
-        assertThrows(IllegalArgumentException.class, () -> new AuditSubmission(1, List.of()));
+        assertThrows(InvalidAuditSubmissionException.class, () -> new AuditSubmission(1, List.of()));
     }
 
     @Test
     void rejectsMissingTransactions() {
-        assertThrows(NullPointerException.class, () -> new AuditSubmission(1, null));
+        assertThrows(InvalidAuditSubmissionException.class, () -> new AuditSubmission(1, null));
+    }
+
+    @Test
+    void rejectsNullEntriesWithADomainException() {
+        List<Transaction> transactions = new ArrayList<>();
+        transactions.add(null);
+        assertThrows(InvalidAuditSubmissionException.class, () -> new AuditSubmission(1, transactions));
     }
 }

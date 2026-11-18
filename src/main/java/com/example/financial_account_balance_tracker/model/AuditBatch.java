@@ -1,5 +1,7 @@
 package com.example.financial_account_balance_tracker.model;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
+
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -12,15 +14,19 @@ public final class AuditBatch {
     private final BigDecimal totalValueOfAllTransactions;
 
     public AuditBatch(List<Transaction> transactions) {
-        this.transactions = List.copyOf(transactions);
+        try {
+            this.transactions = List.copyOf(transactions);
+        } catch (NullPointerException exception) {
+            throw new InvalidAuditSubmissionException("Batch transactions must be present and must not contain nulls", exception);
+        }
         if (this.transactions.isEmpty()) {
-            throw new IllegalArgumentException("Audit batches must contain transactions");
+            throw new InvalidAuditSubmissionException("Audit batches must contain transactions");
         }
         this.totalValueOfAllTransactions = this.transactions.stream()
                 .map(transaction -> transaction.amount().abs())
                 .reduce(new BigDecimal("0.00"), BigDecimal::add);
         if (totalValueOfAllTransactions.compareTo(MAX_ABSOLUTE_VALUE) > 0) {
-            throw new IllegalArgumentException("Audit batch absolute value exceeds GBP 1,000,000");
+            throw new InvalidAuditSubmissionException("Audit batch absolute value exceeds GBP 1,000,000");
         }
     }
 

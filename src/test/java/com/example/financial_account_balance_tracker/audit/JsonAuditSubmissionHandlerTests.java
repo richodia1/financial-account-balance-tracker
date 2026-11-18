@@ -1,9 +1,11 @@
 package com.example.financial_account_balance_tracker.audit;
 
+import com.example.financial_account_balance_tracker.exception.AuditProcessingException;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.impl.BestFitDecreasingAuditBatchingService;
 import org.junit.jupiter.api.Test;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.ByteArrayOutputStream;
@@ -16,7 +18,10 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class JsonAuditSubmissionHandlerTests {
 
@@ -50,8 +55,22 @@ class JsonAuditSubmissionHandlerTests {
             }
         });
 
-        assertThatIllegalStateException().isThrownBy(() -> handler(broken).handle(submission()))
+        assertThatExceptionOfType(AuditProcessingException.class).isThrownBy(() -> handler(broken).handle(submission()))
                 .withMessage("Could not write audit submission to the console");
+    }
+
+    @Test
+    void serializationFailuresRetainTheOriginalCauseAndWriteNoPartialDocument() {
+        JsonMapper failingMapper = mock(JsonMapper.class);
+        JacksonException cause = new JacksonException("Serialization failed") {};
+        when(failingMapper.writeValueAsString(any())).thenThrow(cause);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        JsonAuditSubmissionHandler handler = new JsonAuditSubmissionHandler(new BestFitDecreasingAuditBatchingService(),
+                failingMapper, new PrintStream(bytes, true, StandardCharsets.UTF_8));
+
+        assertThatExceptionOfType(AuditProcessingException.class).isThrownBy(() -> handler.handle(submission()))
+                .withMessage("Could not serialize audit submission").withCause(cause);
+        assertThat(bytes.size()).isZero();
     }
 
     private JsonAuditSubmissionHandler handler(PrintStream output) {

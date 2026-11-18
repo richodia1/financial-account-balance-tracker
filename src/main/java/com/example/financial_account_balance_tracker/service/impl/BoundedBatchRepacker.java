@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import com.example.financial_account_balance_tracker.model.AuditBatch;
 import com.example.financial_account_balance_tracker.model.Transaction;
 
@@ -40,7 +41,7 @@ final class BoundedBatchRepacker {
         long total = 0;
         for (Transaction transaction : transactions) {
             if (transaction.amount().abs().compareTo(AuditBatch.MAX_ABSOLUTE_VALUE) > 0) {
-                throw new IllegalArgumentException("A transaction exceeds the batch capacity");
+                throw new InvalidAuditSubmissionException("A transaction exceeds the batch capacity");
             }
             long amount = transaction.amount().abs().movePointRight(2).longValueExact();
             items.add(new Item(transaction, amount));

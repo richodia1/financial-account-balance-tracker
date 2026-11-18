@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.model;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -10,8 +11,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
-import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AuditBatchTests {
@@ -26,7 +26,7 @@ class AuditBatchTests {
 
     @Test
     void rejectsOnePennyOverCapacityEvenWhenTheSignedTotalIsSmall() {
-        assertThatIllegalArgumentException().isThrownBy(() -> new AuditBatch(List.of(
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatch(List.of(
                 transaction("500000.00"), transaction("-500000.00"), transaction("0.01"))));
     }
 
@@ -43,11 +43,11 @@ class AuditBatchTests {
 
     @Test
     void rejectsMissingOrEmptyTransactions() {
-        assertThatIllegalArgumentException().isThrownBy(() -> new AuditBatch(List.of()));
-        assertThatNullPointerException().isThrownBy(() -> new AuditBatch(null));
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatch(List.of()));
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatch(null));
         List<Transaction> withNull = new ArrayList<>();
         withNull.add(null);
-        assertThatNullPointerException().isThrownBy(() -> new AuditBatch(withNull));
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatch(withNull));
     }
 
     @Test
@@ -67,12 +67,17 @@ class AuditBatchTests {
     @ValueSource(ints = {0, -1, 2})
     void rejectsInvalidLowerBounds(int lowerBound) {
         AuditBatch batch = new AuditBatch(List.of(transaction("200")));
-        assertThatIllegalArgumentException().isThrownBy(() -> new AuditBatchingResult(List.of(batch), lowerBound));
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatchingResult(List.of(batch), lowerBound));
     }
 
     @Test
     void rejectsAnEmptyPacking() {
-        assertThatIllegalArgumentException().isThrownBy(() -> new AuditBatchingResult(List.of(), 1));
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatchingResult(List.of(), 1));
+    }
+
+    @Test
+    void rejectsMissingBatchesWithADomainException() {
+        assertThatExceptionOfType(InvalidAuditSubmissionException.class).isThrownBy(() -> new AuditBatchingResult(null, 1));
     }
 
     private static Transaction transaction(String amount) {

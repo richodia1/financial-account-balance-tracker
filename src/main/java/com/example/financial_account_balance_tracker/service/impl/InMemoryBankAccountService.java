@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.InvalidTransactionException;
 import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
 import com.example.financial_account_balance_tracker.service.TransactionAuditService;
@@ -24,7 +25,9 @@ public final class InMemoryBankAccountService implements BankAccountService {
 
     @Override
     public synchronized void processTransaction(Transaction transaction) {
-        Objects.requireNonNull(transaction, "Transaction must not be null");
+        if (transaction == null) {
+            throw new InvalidTransactionException("Transaction must not be null");
+        }
         BigDecimal nextBalance = balance.add(transaction.amount());
         auditService.record(transaction);
         balance = nextBalance;

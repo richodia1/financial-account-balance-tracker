@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import com.example.financial_account_balance_tracker.model.AuditBatch;
 import com.example.financial_account_balance_tracker.model.Transaction;
 
@@ -21,7 +22,7 @@ final class SmallSetExactBatchPacker {
                 transaction.amount().abs().movePointRight(2).longValueExact()).toArray();
         for (long amount : amounts) {
             if (amount > CAPACITY) {
-                throw new IllegalArgumentException("A transaction exceeds the batch capacity");
+                throw new InvalidAuditSubmissionException("A transaction exceeds the batch capacity");
             }
         }
         int states = 1 << transactions.size();

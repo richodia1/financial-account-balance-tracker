@@ -21,6 +21,8 @@ See the [requirements review](docs/requirements-review.md) for implementation
 evidence and the open minimum-batch-count requirement. The
 [demonstration guide](docs/demonstration-guide.md) provides a build/run sequence,
 IDE settings and a code walkthrough.
+The [error-handling guide](docs/error-handling.md) explains domain exceptions,
+HTTP problem responses and background failure retention.
 
 ## Package organization
 
@@ -44,6 +46,12 @@ dto/
     BalanceResponse.java
 enums/
     TransactionType.java
+exception/
+    AuditProcessingException.java
+    AuditUnavailableException.java
+    GlobalExceptionHandler.java
+    InvalidAuditSubmissionException.java
+    InvalidTransactionException.java
 model/
     AuditBatch.java
     AuditBatchingResult.java
@@ -72,6 +80,7 @@ service/
 | `controller` | HTTP routing, response status, headers and response assembly. |
 | `dto` | Data transferred across the HTTP and console output boundaries. |
 | `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
+| `exception` | Typed domain/operational failures and central HTTP problem responses. |
 | `model` | Internal business data and its invariants, including valid signed amounts. |
 | `producer` | Random transaction creation, scheduling and worker lifecycle. |
 | `service` | Contracts for account processing, audit collection and batch packing. |
@@ -395,6 +404,10 @@ responses. Concurrent transactions may change the balance after a snapshot is re
 
 POST requests return HTTP 405. A request that only accepts HTML returns HTTP 406.
 The root path `/` has no application endpoint and returns HTTP 404.
+These errors use `application/problem+json`, a stable `code` and no-store
+headers; 405 also preserves `Allow`. Server errors include an `errorId` that
+matches the `X-Error-Id` header and server log. See the
+[error-handling guide](docs/error-handling.md) for mappings and failure behavior.
 
 With generation enabled, repeat the request to observe the balance as generated
 transactions arrive. With generation disabled, a fresh application returns

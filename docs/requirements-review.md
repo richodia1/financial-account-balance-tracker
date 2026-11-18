@@ -2,6 +2,7 @@
 
 Review date: 17 November 2026. Initial review baseline: `00509fc`. Updated here
 for exact small-set solving, bounded backtracking and the associated checks.
+Exception handling was subsequently verified on 18 November 2026.
 
 The main processing, balance-enquiry and audit-output paths are implemented and
 tested. **A guaranteed minimum batch count remains an open requirement.** The
@@ -26,6 +27,7 @@ or the matching package beneath `src/test/java`.
 | Required balance-service interface | Verified | `service.BankAccountService` retains `processTransaction(Transaction)` and `double retrieveBalance()`, with an exact decimal accessor added. |
 | Accurate calculations and concurrent enquiries | Verified | Exact decimal arithmetic and one synchronized account monitor; tests include pennies, negative balances, stable snapshots and 8,000 concurrent updates. |
 | REST balance enquiry | Verified | `controller.BalanceController`: `GET /api/balance`, JSON numeric amount, GBP currency and `Cache-Control: no-store`. Real-server tests cover successful and unsupported requests. |
+| Typed failures and consistent HTTP errors | Verified | Domain/operational exceptions, safe problem responses, preserved 404/405/406 headers, server error identifiers and retained background causes. See the error-handling guide. |
 | Exactly 1,000 transactions per default submission | Verified | Collector and dispatcher enforce complete windows; tests cover 999, 1,000, 1,001, multiple windows and shutdown with an incomplete window. |
 | One or more nonempty batches per submission | Verified | Packing retains actual transaction assignments in immutable batches; preservation tests cover repeated occurrences and large windows. |
 | Absolute value per batch at most GBP 1,000,000 | Verified | Integer-penny placement plus independent model validation. Opposite signs consume capacity; tests cover an exact fit and one penny over. |
@@ -146,3 +148,21 @@ small-set solving and bounded backtracking:
 Performance was remeasured using the actual default service; earlier CSV results
 remain available for context. See the [performance report](performance.md) and
 [demonstration guide](demonstration-guide.md).
+
+## Exception-handling validation: 18 November 2026
+
+- Java 21 clean verification passed 143 tests with no failures, errors or skips.
+- HTTP advice tests cover typed validation, audit unavailability, internal audit
+  errors and unexpected bugs. Server responses hide internal messages and causes,
+  provide correlation identifiers, and omit query parameters from the instance.
+- Real-server tests verify 404, 405 and 406 problem bodies, no-store headers and
+  the preserved Allow header. Packaged application checks verified those contracts
+  alongside a successful balance GET and a complete 1,000-item audit submission.
+- Model and audit tests verify custom exception types, preserved causes, unchanged
+  balance/partial-window state on rejection, failure retention and serialization
+  failure before any output is written.
+- The existing packing algorithm and limits are unchanged. Timing CSVs remain the
+  measurements recorded before this error-contract change.
+
+See the [error-handling guide](error-handling.md) for the exception categories,
+HTTP mappings and local failure-path commands.

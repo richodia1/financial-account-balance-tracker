@@ -1,7 +1,9 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
-import com.example.financial_account_balance_tracker.model.Transaction;
+import com.example.financial_account_balance_tracker.exception.AuditUnavailableException;
+import com.example.financial_account_balance_tracker.exception.InvalidTransactionException;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
+import com.example.financial_account_balance_tracker.model.Transaction;
 import com.example.financial_account_balance_tracker.service.BankAccountService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -10,17 +12,17 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -85,7 +87,7 @@ class InMemoryBankAccountServiceTests {
     void rejectsNullTransactionWithoutChangingBalance() {
         service.processTransaction(transaction(1, "200.01"));
 
-        assertThrows(NullPointerException.class, () -> service.processTransaction(null));
+        assertThrows(InvalidTransactionException.class, () -> service.processTransaction(null));
         assertEquals(new BigDecimal("200.01"), service.retrieveExactBalance());
     }
 
@@ -102,7 +104,7 @@ class InMemoryBankAccountServiceTests {
         BankAccountService account = new InMemoryBankAccountService(collector);
         account.processTransaction(transaction(1, "200.00"));
 
-        assertThrows(RejectedExecutionException.class,
+        assertThrows(AuditUnavailableException.class,
                 () -> account.processTransaction(transaction(2, "-50.00")));
         assertEquals(new BigDecimal("200.00"), account.retrieveExactBalance());
         assertEquals(1, collector.pendingTransactionCount());

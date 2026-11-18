@@ -159,6 +159,10 @@ Use the burst-input scenario for a short demonstration of the processing path.
 
 ## IDE run configuration
 
+For error-handling practice, use the commands and failure-path tests in the
+[error-handling guide](error-handling.md). Start with a POST to the read-only
+balance route and trace its 405 response through `GlobalExceptionHandler`.
+
 In IntelliJ, select Project SDK and language level 21. Import the project through
 `pom.xml`, then open `FinancialAccountBalanceTrackerApplication` and use the Run
 icon beside `main`.
