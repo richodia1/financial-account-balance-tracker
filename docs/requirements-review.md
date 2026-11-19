@@ -166,3 +166,18 @@ remain available for context. See the [performance report](performance.md) and
 
 See the [error-handling guide](error-handling.md) for the exception categories,
 HTTP mappings and local failure-path commands.
+
+## API-documentation validation: 19 November 2026
+
+- Added springdoc OpenAPI 3.1 generation and Swagger UI for the balance enquiry.
+  Documentation identifies the GBP balance as a number and describes the actual
+  read-only operation and its problem responses.
+- Java 21 verification passed 145 tests with no failures, errors or skips.
+  Real-server tests cover the generated specification, unchanged account state,
+  UI redirect/assets and local specification configuration.
+- The rebuilt executable JAR served Swagger UI, OpenAPI JSON and the balance
+  endpoint on an available test port. Its balance returned GBP 0.00 with producers
+  disabled, POST retained its 405 problem response, and the owned process stopped
+  cleanly. An existing IDE process was left running for the user to restart.
+- This documentation addition does not change the packing algorithm or the
+  minimum-batch-count limits recorded above.
