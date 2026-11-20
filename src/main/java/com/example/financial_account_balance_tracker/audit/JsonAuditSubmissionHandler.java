@@ -3,11 +3,13 @@ package com.example.financial_account_balance_tracker.audit;
 import com.example.financial_account_balance_tracker.dto.AuditBatchSummary;
 import com.example.financial_account_balance_tracker.dto.AuditSubmissionOutput;
 import com.example.financial_account_balance_tracker.dto.AuditSubmissionSummary;
+import com.example.financial_account_balance_tracker.exception.AuditProcessingException;
 import com.example.financial_account_balance_tracker.model.AuditBatchingResult;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.service.AuditBatchingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.PrintStream;
@@ -34,9 +36,15 @@ public final class JsonAuditSubmissionHandler implements AuditSubmissionHandler 
         AuditSubmissionOutput document = new AuditSubmissionOutput(new AuditSubmissionSummary(result.batches().stream()
                 .map(batch -> new AuditBatchSummary(batch.totalValueOfAllTransactions(), batch.countOfTransactions()))
                 .toList()));
-        output.println(jsonMapper.writeValueAsString(document));
+        String json;
+        try {
+            json = jsonMapper.writeValueAsString(document);
+        } catch (JacksonException exception) {
+            throw new AuditProcessingException("Could not serialize audit submission", exception);
+        }
+        output.println(json);
         if (output.checkError()) {
-            throw new IllegalStateException("Could not write audit submission to the console");
+            throw new AuditProcessingException("Could not write audit submission to the console");
         }
         LOG.info("Audit submission {}: {} transactions, {} batches, lower bound {}, optimality proven: {}",
                 submission.sequence(), submission.transactions().size(), result.batches().size(),

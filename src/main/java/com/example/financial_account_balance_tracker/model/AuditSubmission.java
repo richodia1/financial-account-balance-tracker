@@ -1,5 +1,7 @@
 package com.example.financial_account_balance_tracker.model;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
+
 import java.util.List;
 
 /**
@@ -9,11 +11,15 @@ public record AuditSubmission(long sequence, List<Transaction> transactions) {
 
     public AuditSubmission {
         if (sequence < 1) {
-            throw new IllegalArgumentException("Submission sequence must be positive");
+            throw new InvalidAuditSubmissionException("Submission sequence must be positive");
         }
-        transactions = List.copyOf(transactions);
+        try {
+            transactions = List.copyOf(transactions);
+        } catch (NullPointerException exception) {
+            throw new InvalidAuditSubmissionException("Audit transactions must be present and must not contain nulls", exception);
+        }
         if (transactions.isEmpty()) {
-            throw new IllegalArgumentException("Audit submissions must contain transactions");
+            throw new InvalidAuditSubmissionException("Audit submissions must contain transactions");
         }
     }
 }

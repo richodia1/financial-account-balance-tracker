@@ -1,6 +1,7 @@
 package com.example.financial_account_balance_tracker.model;
 
 import com.example.financial_account_balance_tracker.enums.TransactionType;
+import com.example.financial_account_balance_tracker.exception.InvalidTransactionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -36,25 +37,25 @@ class TransactionTests {
     @ParameterizedTest
     @ValueSource(strings = {"0", "0.00", "-0.00"})
     void rejectsZeroAmounts(String amount) {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(InvalidTransactionException.class,
                 () -> new Transaction(ID, new BigDecimal(amount)));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"200.001", "-200.001", "0.001"})
     void rejectsFractionalPenceInsteadOfRounding(String amount) {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(InvalidTransactionException.class,
                 () -> new Transaction(ID, new BigDecimal(amount)));
     }
 
     @Test
     void rejectsMissingId() {
-        assertThrows(NullPointerException.class,
+        assertThrows(InvalidTransactionException.class,
                 () -> new Transaction(null, new BigDecimal("200.00")));
     }
 
     @Test
     void rejectsMissingAmount() {
-        assertThrows(NullPointerException.class, () -> new Transaction(ID, null));
+        assertThrows(InvalidTransactionException.class, () -> new Transaction(ID, null));
     }
 }

@@ -5,6 +5,12 @@ spring:
 server:
   port: 8081
 
+springdoc:
+  paths-to-match: /api/**
+  override-with-generic-response: false
+  swagger-ui:
+    disable-swagger-default-url: true
+
 tracker:
   producer:
     enabled: true

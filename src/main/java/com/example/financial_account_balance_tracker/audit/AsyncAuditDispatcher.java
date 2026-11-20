@@ -1,5 +1,8 @@
 package com.example.financial_account_balance_tracker.audit;
 
+import com.example.financial_account_balance_tracker.exception.AuditProcessingException;
+import com.example.financial_account_balance_tracker.exception.AuditUnavailableException;
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,7 +12,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -59,15 +61,17 @@ public final class AsyncAuditDispatcher implements SmartLifecycle {
     }
 
     public synchronized void submit(AuditSubmission submission) {
-        Objects.requireNonNull(submission, "Audit submission must not be null");
+        if (submission == null) {
+            throw new InvalidAuditSubmissionException("Audit submission must not be null");
+        }
         if (submission.transactions().size() != submissionSize) {
-            throw new IllegalArgumentException("Audit submission must contain exactly " + submissionSize + " transactions");
+            throw new InvalidAuditSubmissionException("Audit submission must contain exactly " + submissionSize + " transactions");
         }
         if (!running || failure != null) {
-            throw new RejectedExecutionException("Audit dispatcher is not accepting submissions", failure);
+            throw new AuditUnavailableException("Audit dispatcher is not accepting submissions", failure);
         }
         if (!queue.offer(submission)) {
-            throw new RejectedExecutionException("Audit submission queue is full");
+            throw new AuditUnavailableException("Audit submission queue is full");
         }
     }
 
@@ -84,18 +88,20 @@ public final class AsyncAuditDispatcher implements SmartLifecycle {
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            fail(new IllegalStateException("Audit worker interrupted; pending work is retained", exception));
+            fail(new AuditProcessingException("Audit worker interrupted; pending work is retained", exception));
         } catch (RuntimeException exception) {
             fail(exception);
         }
     }
 
     private void fail(RuntimeException exception) {
+        AuditProcessingException processingFailure = exception instanceof AuditProcessingException known ? known
+                : new AuditProcessingException("Audit submission processing failed", exception);
         synchronized (this) {
-            failure = exception;
+            failure = processingFailure;
             running = false;
         }
-        LOG.error("Audit processing stopped; in-flight and queued submissions are retained in memory", exception);
+        LOG.error("Audit processing stopped; in-flight and queued submissions are retained in memory", processingFailure);
     }
 
     @Override

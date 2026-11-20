@@ -73,7 +73,7 @@ class BalanceControllerIntegrationTests {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        assertEquals(405, response.statusCode());
+        assertProblem(response, 405, "METHOD_NOT_ALLOWED");
         assertTrue(response.headers().firstValue("Allow").orElse("").contains("GET"));
         assertEquals(before, accountService.retrieveExactBalance());
     }
@@ -84,7 +84,27 @@ class BalanceControllerIntegrationTests {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        assertEquals(406, response.statusCode());
+        assertProblem(response, 406, "NOT_ACCEPTABLE");
+    }
+
+    @Test
+    void unknownRoutesUseTheSameProblemFormat() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/missing"))
+                .timeout(Duration.ofSeconds(5)).header("Accept", "application/json").GET().build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertProblem(response, 404, "NOT_FOUND");
+    }
+
+    private void assertProblem(HttpResponse<String> response, int status, String code) {
+        assertEquals(status, response.statusCode());
+        assertTrue(response.headers().firstValue("Content-Type").orElse("").startsWith("application/problem+json"));
+        assertEquals("no-store", response.headers().firstValue("Cache-Control").orElse(""));
+        var problem = jsonMapper.readTree(response.body());
+        assertEquals(status, problem.get("status").intValue());
+        assertEquals(code, problem.get("code").asString());
+        assertEquals(response.request().uri().getPath(), problem.get("instance").asString());
     }
 
     private void assertBalance(String expected) throws Exception {

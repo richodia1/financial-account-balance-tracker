@@ -1,5 +1,6 @@
 package com.example.financial_account_balance_tracker.service.impl;
 
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import com.example.financial_account_balance_tracker.model.AuditBatch;
 import com.example.financial_account_balance_tracker.model.AuditBatchingResult;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
@@ -10,7 +11,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.TreeMap;
 
 /**
@@ -23,13 +23,15 @@ public final class BestFitDecreasingAuditBatchingService implements AuditBatchin
 
     @Override
     public AuditBatchingResult pack(AuditSubmission submission) {
-        Objects.requireNonNull(submission, "Audit submission must not be null");
+        if (submission == null) {
+            throw new InvalidAuditSubmissionException("Audit submission must not be null");
+        }
         List<WeightedTransaction> sorted = new ArrayList<>(submission.transactions().size());
         long totalPence = 0;
         int moreThanHalfFull = 0;
         for (Transaction transaction : submission.transactions()) {
             if (transaction.amount().abs().compareTo(AuditBatch.MAX_ABSOLUTE_VALUE) > 0) {
-                throw new IllegalArgumentException("A transaction cannot exceed the GBP 1,000,000 batch capacity");
+                throw new InvalidAuditSubmissionException("A transaction cannot exceed the GBP 1,000,000 batch capacity");
             }
             long pence = transaction.amount().abs().movePointRight(2).longValueExact();
             sorted.add(new WeightedTransaction(transaction, pence));

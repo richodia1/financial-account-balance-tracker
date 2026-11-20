@@ -189,6 +189,29 @@ optimality was proven. The handler checks the console stream for write errors;
 an error propagates to the dispatcher, which retains the failed submission. A
 partially written console line cannot be undone, and no retry is automatic.
 
+## Follow an exception
+
+Domain validation throws `InvalidTransactionException` or
+`InvalidAuditSubmissionException`. Audit hand-off rejection becomes
+`AuditUnavailableException`, preserving the rejection cause. Serialization,
+console delivery and background handler failures become `AuditProcessingException`.
+Validation stays with the models and services; exception classes carry no HTTP
+annotations.
+
+`exception.GlobalExceptionHandler` translates exceptions during HTTP requests
+into standard problem responses. It delegates built-in MVC errors to the
+framework so statuses such as 404, 405 and 406 retain their meaning and headers.
+Explicit transaction validation maps to 400. Internal audit data/processing
+failures and unexpected bugs map to safe 500 responses; audit unavailability maps
+to 503. Server response identifiers link to detailed server logs without exposing
+exception messages or causes in the response.
+
+Worker-thread failures do not pass through the HTTP advice. The dispatcher
+retains failed work, normalizes processing failures once, and rejects new complete
+windows. The account still commits its balance only after successful audit
+recording. The [error-handling guide](error-handling.md) describes these boundaries
+and the tests that verify them.
+
 ## Explain money precision
 
 `BigDecimal` represents amounts and the accumulated balance. Addition does not

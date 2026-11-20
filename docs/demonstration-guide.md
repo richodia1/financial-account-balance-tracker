@@ -55,6 +55,16 @@ The root URL `/` returns 404 because the balance route is `/api/balance`. If por
 8081 is occupied, start with `--server.port=8082` and use that port in the curl
 command. Stop this application with Ctrl+C when finished.
 
+To explore the same GET interactively, open
+[Swagger UI](http://localhost:8081/swagger-ui/index.html). Expand **Account balance**,
+select **GET /api/balance**, click **Try it out**, then **Execute**. The result
+shows the live balance and HTTP response. The generated specification is available
+at [`/v3/api-docs`](http://localhost:8081/v3/api-docs).
+
+After adding the Swagger dependency for the first time, stop the old IDE run,
+reload the Maven project and restart. That loads the new documentation library
+onto the application classpath. No additional process is needed for Swagger UI.
+
 ## 3. Observe a complete audit submission
 
 With the default producers running, wait approximately 20 seconds. The console
@@ -97,6 +107,7 @@ All packages below sit under `com.example.financial_account_balance_tracker`.
 | --- | --- |
 | `FinancialAccountBalanceTrackerApplication` | Starts the application and component scanning. |
 | `config.ProducerConfiguration` and `config.AuditConfiguration` | Wire services and lifecycle-managed workers. The audit worker starts before producers and stops after them. |
+| `config.OpenApiConfiguration` | Supplies documentation metadata. Springdoc scans the HTTP mappings and response annotations to generate OpenAPI and serve Swagger UI. |
 | `model.Transaction` and `enums.TransactionType` | Immutable identity and signed amount; scale validation rejects fractional pennies. Type is derived from the sign. |
 | `producer.RandomTransactionFactory` | Generates random IDs and signed whole-pence amounts within inclusive limits. |
 | `producer.TransactionProducer` | Owns one dedicated fixed-rate scheduled executor per transaction type, with a 40 ms period. |
@@ -158,6 +169,10 @@ At a target rate of 50 transactions per second, filling that window takes roughl
 Use the burst-input scenario for a short demonstration of the processing path.
 
 ## IDE run configuration
+
+For error-handling practice, use the commands and failure-path tests in the
+[error-handling guide](error-handling.md). Start with a POST to the read-only
+balance route and trace its 405 response through `GlobalExceptionHandler`.
 
 In IntelliJ, select Project SDK and language level 21. Import the project through
 `pom.xml`, then open `FinancialAccountBalanceTrackerApplication` and use the Run

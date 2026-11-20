@@ -1,5 +1,8 @@
 package com.example.financial_account_balance_tracker.audit;
 
+import com.example.financial_account_balance_tracker.exception.AuditProcessingException;
+import com.example.financial_account_balance_tracker.exception.AuditUnavailableException;
+import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmissionException;
 import com.example.financial_account_balance_tracker.model.AuditSubmission;
 import com.example.financial_account_balance_tracker.model.Transaction;
 import org.junit.jupiter.api.AfterEach;
@@ -16,11 +19,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -51,7 +54,7 @@ class AsyncAuditDispatcherTests {
         assertEquals(List.of(submission(1), submission(2), submission(3)), received);
         assertEquals(Set.of("audit-dispatcher"), threadNames);
         assertFalse(dispatcher.isRunning());
-        assertThrows(RejectedExecutionException.class, () -> dispatcher.submit(submission(4)));
+        assertThrows(AuditUnavailableException.class, () -> dispatcher.submit(submission(4)));
     }
 
     @Test
@@ -70,7 +73,7 @@ class AsyncAuditDispatcherTests {
             dispatcher.submit(submission(2));
 
             Future<?> attempt = caller.submit(() ->
-                    assertThrows(RejectedExecutionException.class, () -> dispatcher.submit(submission(3))));
+                    assertThrows(AuditUnavailableException.class, () -> dispatcher.submit(submission(3))));
             attempt.get(2, TimeUnit.SECONDS);
 
             assertEquals(1, dispatcher.queuedSubmissionCount());
@@ -86,10 +89,11 @@ class AsyncAuditDispatcherTests {
     void retainsFailedAndQueuedSubmissionsAndRejectsNewWork() throws Exception {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
+        IllegalStateException handlerFailure = new IllegalStateException("Audit handler failed");
         AsyncAuditDispatcher dispatcher = dispatcher(1, submission -> {
             entered.countDown();
             await(release);
-            throw new IllegalStateException("Audit handler failed");
+            throw handlerFailure;
         });
         try {
             dispatcher.start();
@@ -104,7 +108,10 @@ class AsyncAuditDispatcherTests {
         assertEquals(submission(1), dispatcher.failedSubmission().orElseThrow());
         assertEquals(1, dispatcher.queuedSubmissionCount());
         assertFalse(dispatcher.isRunning());
-        assertThrows(RejectedExecutionException.class, () -> dispatcher.submit(submission(3)));
+        AuditUnavailableException rejected = assertThrows(AuditUnavailableException.class,
+                () -> dispatcher.submit(submission(3)));
+        assertTrue(rejected.getCause() instanceof AuditProcessingException);
+        assertSame(handlerFailure, rejected.getCause().getCause());
         assertThrows(IllegalStateException.class, dispatcher::start);
     }
 
@@ -114,7 +121,7 @@ class AsyncAuditDispatcherTests {
         dispatcher.start();
         AuditSubmission tooSmall = new AuditSubmission(1, List.of(transaction(1)));
 
-        assertThrows(IllegalArgumentException.class, () -> dispatcher.submit(tooSmall));
+        assertThrows(InvalidAuditSubmissionException.class, () -> dispatcher.submit(tooSmall));
         assertEquals(0, dispatcher.queuedSubmissionCount());
     }
 
@@ -122,7 +129,28 @@ class AsyncAuditDispatcherTests {
     void rejectsSubmissionsBeforeStartup() {
         AsyncAuditDispatcher dispatcher = dispatcher(1, submission -> {});
 
-        assertThrows(RejectedExecutionException.class, () -> dispatcher.submit(submission(1)));
+        assertThrows(AuditUnavailableException.class, () -> dispatcher.submit(submission(1)));
+    }
+
+    @Test
+    void doesNotWrapAnAlreadyTypedAuditFailureAgain() {
+        AuditProcessingException failure = new AuditProcessingException("Console write failed");
+        AsyncAuditDispatcher dispatcher = dispatcher(1, submission -> { throw failure; });
+        dispatcher.start();
+        dispatcher.submit(submission(1));
+        dispatcher.stop();
+
+        assertSame(failure, assertThrows(AuditUnavailableException.class,
+                () -> dispatcher.submit(submission(2))).getCause());
+        assertEquals(submission(1), dispatcher.failedSubmission().orElseThrow());
+    }
+
+    @Test
+    void rejectsMissingSubmissionsWithADomainException() {
+        AsyncAuditDispatcher dispatcher = dispatcher(1, submission -> {});
+        dispatcher.start();
+        assertThrows(InvalidAuditSubmissionException.class, () -> dispatcher.submit(null));
+        assertEquals(0, dispatcher.queuedSubmissionCount());
     }
 
     @Test

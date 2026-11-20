@@ -21,6 +21,8 @@ See the [requirements review](docs/requirements-review.md) for implementation
 evidence and the open minimum-batch-count requirement. The
 [demonstration guide](docs/demonstration-guide.md) provides a build/run sequence,
 IDE settings and a code walkthrough.
+The [error-handling guide](docs/error-handling.md) explains domain exceptions,
+HTTP problem responses and background failure retention.
 
 ## Package organization
 
@@ -34,6 +36,7 @@ audit/
     JsonAuditSubmissionHandler.java
 config/
     AuditConfiguration.java
+    OpenApiConfiguration.java
     ProducerConfiguration.java
 controller/
     BalanceController.java
@@ -44,6 +47,12 @@ dto/
     BalanceResponse.java
 enums/
     TransactionType.java
+exception/
+    AuditProcessingException.java
+    AuditUnavailableException.java
+    GlobalExceptionHandler.java
+    InvalidAuditSubmissionException.java
+    InvalidTransactionException.java
 model/
     AuditBatch.java
     AuditBatchingResult.java
@@ -72,6 +81,7 @@ service/
 | `controller` | HTTP routing, response status, headers and response assembly. |
 | `dto` | Data transferred across the HTTP and console output boundaries. |
 | `enums` | Named business classifications such as `CREDIT` and `DEBIT`. |
+| `exception` | Typed domain/operational failures and central HTTP problem responses. |
 | `model` | Internal business data and its invariants, including valid signed amounts. |
 | `producer` | Random transaction creation, scheduling and worker lifecycle. |
 | `service` | Contracts for account processing, audit collection and batch packing. |
@@ -395,12 +405,39 @@ responses. Concurrent transactions may change the balance after a snapshot is re
 
 POST requests return HTTP 405. A request that only accepts HTML returns HTTP 406.
 The root path `/` has no application endpoint and returns HTTP 404.
+These errors use `application/problem+json`, a stable `code` and no-store
+headers; 405 also preserves `Allow`. Server errors include an `errorId` that
+matches the `X-Error-Id` header and server log. See the
+[error-handling guide](docs/error-handling.md) for mappings and failure behavior.
 
 With generation enabled, repeat the request to observe the balance as generated
 transactions arrive. With generation disabled, a fresh application returns
 `{"balance":0.00,"currency":"GBP"}`. The HTTP integration tests disable the
 producers and apply known credits and debits directly to the service before
 verifying the resulting responses.
+
+### Explore the API in Swagger UI
+
+With the application running on its default port, open
+[Swagger UI](http://localhost:8081/swagger-ui/index.html). The shorter
+[`/swagger-ui.html`](http://localhost:8081/swagger-ui.html) address redirects there.
+The generated [OpenAPI JSON](http://localhost:8081/v3/api-docs) describes the API
+and its response schemas.
+
+Expand **Account balance**, select **GET /api/balance**, click **Try it out** and
+then **Execute**. The page shows the request URL, HTTP status, headers and current
+GBP balance. Repeat Execute to read another snapshot while producers are running.
+The documented example amount is illustrative; the server returns the live value.
+
+Transaction generation and audit processing run internally. Swagger documents the
+read-only balance enquiry, including its numeric decimal schema and problem
+responses. `OpenApiConfiguration` supplies the API title and description;
+controller and response DTO annotations describe the operation and fields.
+
+After first pulling this dependency change, stop the previous IDE run, reload the
+Maven project and restart the application. A process started before the change
+will still have its old classpath. If using another server port, use that port for
+the documentation addresses too.
 
 ## Dependency choices
 
@@ -410,6 +447,7 @@ framework and its supporting libraries aligned.
 | Dependency | Purpose and assessment |
 | --- | --- |
 | `spring-boot-starter-webmvc` | Provides HTTP request handling, JSON support and an embedded servlet server. It is an official framework starter with maintained documentation and managed transitive dependencies. |
+| `springdoc-openapi-starter-webmvc-ui` | Generates the OpenAPI description and serves Swagger UI. Version 3.2.0 is pinned separately; its [release notes](https://github.com/springdoc/springdoc-openapi/releases/tag/v3.2.0) identify Spring Boot 4.1.2 as its build baseline. Real-server tests check the documented contract, UI assets and local specification URL. |
 | `spring-boot-starter-webmvc-test` | Provides the framework's application and MVC testing support, including the managed unit-test libraries. It supports testing application configuration and later HTTP behavior. |
 
 State is held in memory. A persistence framework is unnecessary for that design.
@@ -420,6 +458,7 @@ Reference documentation:
 
 - [Framework system requirements](https://docs.spring.io/spring-boot/system-requirements.html)
 - [Application testing](https://docs.spring.io/spring-boot/reference/testing/spring-boot-applications.html)
+- [OpenAPI and Swagger UI integration](https://springdoc.org/)
 - [Maven Wrapper](https://maven.apache.org/wrapper/)
 - [Decimal arithmetic](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/math/BigDecimal.html)
 - [Synchronization and memory visibility](https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html#jls-17.4.5)
