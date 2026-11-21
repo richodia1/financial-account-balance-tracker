@@ -7,22 +7,21 @@ transaction audit batches.
 
 The application builds, tests and starts as an HTTP service. It implements an
 immutable transaction model, a thread-safe in-memory balance service and a REST
-balance endpoint. Dedicated credit and debit producers run automatically. Accepted
-transactions are collected into complete audit windows and handed to a dedicated
-worker. The worker packs those transactions into batches capped at GBP 1,000,000
-of absolute value and prints a JSON summary. Packing starts with best-fit decreasing
-and combines exact small-set solving with bounded repair. A lower-bound diagnostic distinguishes proven
-optimal results from heuristic results. An opt-in performance demonstration measures packing and the
-account-to-JSON pipeline for 1,000- and 100,000-transaction submissions. See the
-[performance and packing-quality report](docs/performance.md) for results and
-remaining limits.
+balance endpoint with Swagger UI. Dedicated credit and debit producers run
+automatically. Complete audit windows are processed by a separate worker and
+packed into the minimum number of batches, each capped at GBP 1,000,000 of
+absolute transaction value.
 
-See the [requirements review](docs/requirements-review.md) for implementation
-evidence and the open minimum-batch-count requirement. The
-[demonstration guide](docs/demonstration-guide.md) provides a build/run sequence,
-IDE settings and a code walkthrough.
-The [error-handling guide](docs/error-handling.md) explains domain exceptions,
-HTTP problem responses and background failure retention.
+Fast packing, local repair and pair lookahead provide candidate solutions. Mathematical
+lower bounds and complete exact search establish the minimum before a packing
+is returned. The implementation uses exact whole-pence capacity arithmetic and
+retains every original transaction occurrence.
+
+See the [requirements review](docs/requirements-review.md) for acceptance evidence,
+the [performance report](docs/performance.md) for reproducible 1,000- and
+100,000-transaction measurements, the [demonstration guide](docs/demonstration-guide.md)
+for build/run and IDE instructions, and the [error-handling guide](docs/error-handling.md)
+for domain exceptions, HTTP responses and background processing behaviour.
 
 ## Package organization
 
@@ -68,10 +67,12 @@ service/
     impl/
         BestFitDecreasingAuditBatchingService.java
         BoundedBatchRepacker.java
+        ExactAuditBatchPacker.java
         InMemoryBankAccountService.java
         InMemoryTransactionAuditService.java
         OptimizingAuditBatchingService.java
         SmallSetExactBatchPacker.java
+        LookaheadAuditBatchPacker.java
 ```
 
 | Package | Responsibility |
@@ -171,14 +172,17 @@ exactly once across eight submissions. A functional test also collects a
 audit handler does not block account processing or balance enquiries.
 Packing tests verify absolute-value limits, exact-capacity and one-penny-over
 boundaries, repeated transaction occurrences, deterministic ordering, lower
-bounds and known heuristic limitations. Seeded 1,000- and 100,000-transaction
+bounds and initial-packing comparison cases. Seeded 1,000- and 100,000-transaction
 inputs verify that each transaction and the exact absolute total are preserved.
 Output tests parse the JSON document and exercise console-write failure handling;
 a configuration test runs the default collection-to-JSON pipeline.
 Additional quality tests compare small inputs against an independent exhaustive
 assignment solver. Tests cover exact repair, the 18-item subset limit, the
-128-item bounded-search limit, search-budget fallback and both repaired
-1,000-item cost counterexamples.
+128-item local-search limit and completion after a local search budget is exhausted.
+Complete-search tests independently check feasible and infeasible batch counts,
+prove minima above weak volume bounds, verify interruption behaviour and handle
+100,000 transaction occurrences without recursive search. Large-window tests
+verify minimum counts, exact totals and preservation of every original occurrence.
 
 ### Run the performance demonstration
 
@@ -310,78 +314,47 @@ console write cannot be rolled back and there is no automatic retry.
 
 ### Batch-count minimization
 
-The default `OptimizingAuditBatchingService` starts with
-`BestFitDecreasingAuditBatchingService`. That initial service sorts by descending absolute amount, then
-puts each transaction into the tightest existing batch that can hold it. It opens
-a new batch only when none fits. A `TreeMap` indexes remaining capacities and a
-deque retains every batch when several have the same capacity. Stable sorting and
-FIFO tie-breaking give repeatable results for the same input.
+The default `OptimizingAuditBatchingService` returns a minimum-count packing for
+each successfully processed submission. Its stages separate finding a good
+packing from establishing that its batch count is optimal:
 
-Amounts are converted to exact integer pennies for capacity decisions. A balanced
-tree avoids scanning every batch for each item: packing takes O(N log N) time and
-O(N) additional memory, including the sorted view and retained assignments.
+1. **Best-fit decreasing:** sort absolute amounts largest first and place each
+   transaction in the tightest existing batch that fits. A `TreeMap` of remaining
+   capacities provides an O(N log N) initial packing with O(N) additional memory.
+2. **Small exact solutions and local improvement:** solve complete submissions
+   of at most 18 items by subset dynamic programming. Larger submissions use
+   small-set repair and a second candidate built using two-item lookahead. These accelerators preserve individual transaction occurrences.
+3. **Lower-bound proof:** the volume bound is
+   `ceil(sum(abs(amount)) / capacity)`. A sorted-prefix cardinality bound also
+   accounts for the number of large items that fit per batch. If a feasible
+   packing reaches a valid bound, its count is the exact minimum.
+4. **Complete certification:** when a count is still above the bound,
+   `ExactAuditBatchPacker` tests smaller candidate counts in ascending order.
+   Its iterative search enumerates feasible item-to-bin assignments, removes
+   symmetric equal-load choices and prunes states whose unusable residual
+   capacity exceeds the available slack. The first feasible count is minimal;
+   if every smaller count is infeasible, the incumbent is certified minimal.
 
-The initial `AuditBatchingResult` reports the greater of two valid lower bounds:
+Complete certification continues until the minimum has been established; local
+acceleration budgets do not stop this search. Explicit interruption raises
+`AuditProcessingException`; the existing dispatcher retains the submission.
+A successfully returned default result has `optimalityProven() == true`.
 
-- `ceil(sum(abs(amount)) / 1,000,000)`.
-- The number of transactions individually larger than half the batch capacity,
-  because no two of those transactions can share a batch.
+Each transaction remains indivisible. Credits and debits consume capacity by
+absolute value. Duplicate IDs and repeated object references retain their
+original multiplicities. No transaction is discarded, split or replaced with a
+synthetic amount.
 
-When that initial batch count reaches the bound, the result is already provably
-optimal and repair is skipped. Otherwise:
+The complete search stores explicit arrays rather than recursing once per
+transaction, using O(N + B) search state for N items and B candidate batches.
+A memo cache with a 16 MiB entry-accounting budget stores proved-infeasible
+states; eviction preserves completeness. Exact bin packing has exponential
+worst-case search cost. The fast stages and
+bounds avoid complete enumeration when they already establish the minimum;
+the [performance report](docs/performance.md) measures the actual configured
+pipeline on reproducible 1,000- and 100,000-transaction workloads.
 
-1. Submissions of at most 18 transactions are solved exactly by subset dynamic
-   programming. This proves their minimum and can tighten a weak lower bound.
-2. Larger submissions may receive two repair passes. Each pass selects up to six
-   underfilled batches containing at most 128 transactions in total, prioritizing
-   the lowest totals. A volume check first tests whether fewer batches are
-   possible. Selected sets of at most 18 items use the exact subset solver;
-   larger sets use bounded backtracking to try fitting into one fewer batch.
-   Replacement happens only when a valid reduction has been found.
-
-A linear check retains the six lightest eligible totals. If no prefix of two
-through six can fit into one fewer batch, no permitted group can do so, and
-candidate sorting is skipped.
-
-`SmallSetExactBatchPacker` takes O(K * 2^K) time and O(2^K) space, with K at most
-18. Its state arrays use roughly 3.25 MiB at that limit.
-`BoundedBatchRepacker` sorts up to 128 individual transactions largest first,
-then explores assignments to at most five target batches. Equal-load bins are
-interchangeable and are skipped to avoid symmetric branches. Each attempt visits
-at most 100,000 search nodes; depth is at most 128 items plus the completion call.
-The limits bound computational work, not elapsed time under arbitrary scheduling.
-No transaction aggregation or synthetic replacement transactions are used.
-
-These fixed bounds keep unbounded exponential work away from the complete
-1,000- or 100,000-item submission. A failed or exhausted search retains the valid
-initial packing. Exhaustion is not treated as proof that the target is infeasible.
-Local repair preserves every transaction occurrence and cannot increase the
-initial count. It does not turn a local optimum into a global proof: larger
-submissions keep the original global lower bound.
-
-The former six-item counterexample `[440000, 250000, 200000, 390000, 340000, 270000]`
-now uses the proven minimum of two batches. The default-window version, padded
-with 994 transactions of magnitude GBP 500,000, improves from 500 to **499 batches**.
-Five GBP 340,000 items are also solved exactly: the returned lower bound is
-tightened from two to their actual minimum of three.
-
-The former 21-item-candidate limitation is repaired too: 974 items of magnitude
-GBP 500,000, the six remainder amounts, and 20 items of magnitude GBP 200 now use
-the proven minimum of **489 batches**, instead of 490. Its 100,000-item version
-uses **49,989**, instead of 49,990.
-
-Large inputs remain heuristic whenever the global bound is not reached. More
-than 128 selected items, the six-batch group limit, two repair passes and search
-budget exhaustion can leave opportunities unexplored. The
-[requirements review](docs/requirements-review.md#cost-minimisation-status) records
-the scope of the guarantees. A false optimality flag means unproven, rather than
-necessarily suboptimal, because global bounds can also be weak.
-
-The algorithm targets fast, low-cost packing for large windows. If a guaranteed
-minimum for every input is mandatory, this implementation needs an exact
-optimization strategy with separately assessed runtime and dependency costs.
-See the [optimization formulation](https://www.scipopt.org/scip/doc/html/BINPACKING_PROBLEM.php)
-and the [heuristic/optimization discussion](https://scipbook.readthedocs.io/en/latest/bpp.html).
+Reference formulation: [minimum-bin packing](https://developers.google.com/optimization/pack/bin_packing).
 
 ## Balance API
 

@@ -4,7 +4,7 @@ import com.example.financial_account_balance_tracker.exception.InvalidAuditSubmi
 
 import java.util.List;
 
-/** The packing and a lower bound, not an assertion that every packing is optimal. */
+/** Immutable batch assignments and a certified lower bound on their count. */
 public record AuditBatchingResult(List<AuditBatch> batches, int batchCountLowerBound) {
 
     public AuditBatchingResult {

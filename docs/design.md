@@ -112,68 +112,47 @@ they would violate the configured transaction count.
 
 ## Follow batch packing
 
-The default `OptimizingAuditBatchingService` begins with
-`BestFitDecreasingAuditBatchingService`, which creates an independent, weighted view of
-the submission; the original transaction order stays intact. Each magnitude is
-converted to exact whole pennies. The view is sorted largest first, so smaller
-transactions can fill space around larger ones.
+`OptimizingAuditBatchingService` produces a minimum-count assignment of the original
+transactions. `BestFitDecreasingAuditBatchingService` first creates a weighted,
+absolute-pence view sorted largest first. A capacity-indexed `TreeMap` selects
+the tightest fitting batch; equal remaining capacities share a deque. Each
+constructed `AuditBatch` independently verifies its absolute-value limit.
 
-For each transaction, a `TreeMap.ceilingEntry` finds the smallest remaining
-capacity that still fits it. The selected batch is removed from its old capacity
-entry, updated and re-indexed under its new capacity. Equal remaining capacities
-share a deque so no batch gets overwritten. A new batch is created only when no
-existing batch has room. Full batches leave the capacity index.
+Complete submissions of at most 18 items are solved using subset dynamic
+programming. Larger submissions can use bounded small-set repair and
+`LookaheadAuditBatchPacker` as accelerators. The lookahead starts each bin with
+the largest remaining item, then compares a single-item fit with up to 96
+deterministically sampled pair fits. Ordered magnitude queues retain every
+original occurrence. Each constructed batch stays within capacity.
+Their local work limits do not limit the subsequent complete certification.
 
-Mutable construction state is local to a single call. The result contains
-immutable `AuditBatch` objects retaining the actual transaction assignments, not
-just counters. Each batch independently validates the absolute-value limit and
-caches its exact decimal total. This allows tests to inspect every assignment.
-Initial packing is O(N log N) time and O(N) space; calls do not share mutable state.
+`ExactAuditBatchPacker` combines the total-volume lower bound with sorted-prefix
+cardinality bounds: if every item in a prefix has size at least w, no batch can
+hold more than floor(capacity / w) prefix items. A packing that attains a valid
+lower bound is immediately proven minimum-count.
 
-Credit and debit signs only affect the account balance. Both count positively
-toward audit capacity, so two opposite GBP 500,000 transactions fill one batch.
-An individual amount above GBP 1,000,000 fails packing; generated transactions
-are limited to GBP 500,000 and cannot trigger this failure.
+Otherwise, the complete stage tests each candidate count from the lower bound
+up to the feasible incumbent. Items are considered largest first. For a fixed
+count, an iterative depth-first search explores placements into existing bins
+and the next unused bin. Equal-load bins are interchangeable, so one
+representative per load suffices. A residual gap smaller than the smallest item
+can never be used; exceeding the candidate's total slack proves the partial
+assignment infeasible. These pruning rules preserve every non-equivalent
+feasible completion.
 
-The result also carries a batch-count lower bound: the larger of the rounded-up
-total-volume bound and the number of items larger than half the capacity.
-Equality between the bound and the actual count proves optimality. Otherwise the
-result is unproven; this heuristic does not guarantee a global minimum. Known
-counterexamples and weak-bound cases are tested and described in the README.
-The default wrapper then improves results where its bounded repair can do
-so. Submissions with at most 18 transactions are solved in full, proving their
-minimum even when the initial bound was weak. Larger submissions receive at most
-two local repair passes: each selects up to six underfilled batches containing at
-most 128 transactions altogether, starting with the lowest totals. A batch that
-would exceed that item budget is skipped. A volume check avoids searches that
-cannot possibly reduce the selected count. Before sorting candidates, a linear
-check retains the six lightest eligible totals. If even these optimistic prefixes
-of two through six batches cannot fit into one fewer batch, no permitted group
-can eliminate a batch.
+The first feasible candidate is the minimum. If all smaller candidates are
+infeasible, the incumbent is the minimum. The result's lower bound is then the
+proven batch count, so `optimalityProven()` is true for every successful default
+packing. No local node budget or lack of improvement is interpreted as proof.
 
-`SmallSetExactBatchPacker` stores the minimum bin count and lightest final-bin
-load for every subset, considering each possible final item. It retains parent
-choices and reconstructs the transaction order, then the exact batch assignments.
-Work is O(K * 2^K) time and O(2^K) space, with K capped at 18.
-
-For selected sets of 19 to 128 items, `BoundedBatchRepacker` searches for a valid
-assignment into one fewer batch. It sorts magnitudes largest first and backtracks
-when an assignment prevents later items from fitting. Bins with equal current
-loads are symmetric, so only one such branch needs exploring. This search keeps
-every original transaction as an individual indexed item, including duplicates.
-
-Each attempt has a 100,000-node budget and at most five target bins. All search
-state is local to the call: load and assignment arrays, plus recursion of bounded
-depth. Work per node is bounded by the small target-bin count. There is no
-unbounded state cache or subset array for 128 items. A missing result leaves the
-initial packing intact and does not prove infeasibility; the budget may simply
-have expired. Only strictly better valid assignments replace initial batches.
-
-The former 1,000-item counterexamples now reach 499 and 489 batches respectively. Local exactness
-does not prove a global optimum: the global lower bound is preserved for larger
-submissions; fixed search limits can still leave opportunities unexplored.
-Solving the entire small submission can legitimately tighten that bound to its
-exact minimum. This distinction keeps the optimality flag meaningful.
+Explicit load, assignment and traversal arrays use O(N + B) exact-search state
+and avoid a recursive stack frame per transaction. A memo cache uses a 16 MiB
+entry-accounting budget and stores only proved-infeasible canonical states.
+Eviction preserves completeness and allows those states to be explored again.
+Worst-case search time is exponential. The fast stages and lower bounds establish many optima without
+complete enumeration. Interruption raises `AuditProcessingException` and leaves
+failure retention to the dispatcher; it never emits a partial optimisation result.
+All mutable packing state is local to one call, and returned batches are immutable.
 
 ## Follow console output
 
@@ -271,8 +250,8 @@ construct a fresh implementation directly to isolate individual scenarios.
   inputs verify exact totals and preservation of all 1,000 or 100,000 transactions.
 - `service.impl.OptimizingAuditBatchingServiceTests` checks exact small solutions,
   duplicate occurrence preservation, the 18-item bound, non-increasing counts on
-  large inputs, conservative proof metadata, both repaired counterexamples and
-  safe fallback when the bounded-search budget is exhausted.
+  large inputs, minimum-count certificates and completion after a local-search
+  budget is exhausted.
 - `service.impl.BoundedBatchRepackerTests` checks backtracking, repeated
   occurrences, capacity and combination infeasibility, the 128-item limit,
   budget exhaustion and independent subsequent calls.
@@ -282,6 +261,10 @@ construct a fresh implementation directly to isolate individual scenarios.
   reaches that count. It also checks the repaired 1,000-item counterexample.
   Its separate implementation also validates bounded feasibility results against
   exact small-input minima. The oracle is limited to small test inputs.
+- `service.impl.ExactAuditBatchPackerTests` checks complete infeasibility proof,
+  cancellation and iterative traversal of 100,000 repeated occurrences.
+- `service.impl.LookaheadAuditBatchPackerTests` checks minimum-bound closure
+  on the seeded 100,000-item workload and occurrence preservation.
 - `audit.JsonAuditSubmissionHandlerTests` parses the JSON contract and exercises
   console-write failures.
 - The application context test verifies that the application configuration loads.
@@ -300,11 +283,11 @@ and absolute totals match, and the final account balance is exact. It reports
 packing quality alongside timings, including a simple arrival-order baseline.
 The [performance report](performance.md) defines the measurements and their limits.
 
-## Keep the current limits visible
+## Runtime and measurement model
 
 The balance, partial window, queued submissions and any failed in-flight work are
-in memory and are lost on restart. Packing is heuristic when its lower bound is
-not reached. Correctness tests and local timing samples demonstrate the larger
-window, but the timing demonstration is not a production load test. It excludes
+in memory and are lost on restart. Successful default packings are minimum-count.
+Correctness tests and local timing samples demonstrate the larger window. The
+timing demonstration measures the defined local workload; it is not a production load test. It excludes
 rate-limited generation, HTTP traffic, terminal output of the JSON payload,
 sustained queue contention and durable storage.

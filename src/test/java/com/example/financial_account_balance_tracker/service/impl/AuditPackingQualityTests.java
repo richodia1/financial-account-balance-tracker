@@ -113,6 +113,25 @@ class AuditPackingQualityTests {
         }
     }
 
+    @Test
+    void completeIterativeSearchAgreesWithTheIndependentAssignmentOracle() {
+        SplittableRandom random = new SplittableRandom(314159);
+        ExactAuditBatchPacker exact = new ExactAuditBatchPacker();
+        for (int sample = 0; sample < 80; sample++) {
+            long[] pennies = new long[6 + random.nextInt(7)];
+            for (int item = 0; item < pennies.length; item++) {
+                pennies[item] = random.nextLong(20000, 50000001);
+            }
+            int minimum = exactMinimum(pennies);
+            AuditSubmission input = submission(pennies);
+            var result = exact.packInto(input.transactions(), minimum).orElseThrow();
+            assertThat(result).hasSize(minimum);
+            if (minimum > 1) {
+                assertThat(exact.packInto(input.transactions(), minimum - 1)).isEmpty();
+            }
+        }
+    }
+
     /**
      * Exhaustive bin assignments, independent of the production subset solver.
      * Symmetric equal-load bins are interchangeable. Sorting only prunes search;
