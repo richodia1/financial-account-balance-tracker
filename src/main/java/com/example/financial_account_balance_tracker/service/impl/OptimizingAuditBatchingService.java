@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Objects;
 
-/** Fast initial packing with exact small-set solving and bounded-search repair. */
+/** Minimum-count packing with fast incumbents followed by complete exact certification. */
 public final class OptimizingAuditBatchingService implements AuditBatchingService {
 
     private static final int MAX_REPAIR_BATCHES = 6;
@@ -71,9 +71,8 @@ public final class OptimizingAuditBatchingService implements AuditBatchingServic
             improved.addAll(replacement);
             batches = improved;
         }
-        // An exact local solution is not a global lower bound. Preserve the
-        // original bound unless the entire submission was solved above.
-        return new AuditBatchingResult(batches, initial.batchCountLowerBound());
+        return new ExactAuditBatchPacker().minimize(submission,
+                new AuditBatchingResult(batches, initial.batchCountLowerBound()));
     }
 
     private static List<AuditBatch> selectRepairBatches(List<AuditBatch> batches) {

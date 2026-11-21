@@ -71,7 +71,9 @@ worker has failed; reads do not check audit health.
 Serialization completes before printing begins. Serialization failure retains its
 cause and emits no partial document. Console write failure is detected through
 the stream's error flag. A partially written document cannot be rolled back.
-There is no automatic downstream retry or durable recovery.
+There is no automatic downstream retry or durable recovery. Exact-packing
+interruption raises `AuditProcessingException`, preserving the thread interrupt
+status; no provisional packing is emitted.
 
 ## Try the HTTP error paths
 

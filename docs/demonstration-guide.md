@@ -1,9 +1,8 @@
 # Demonstration Guide
 
-Use this sequence to build the application, observe its behavior and explain the
-design. The [requirements review](requirements-review.md) records the open batch
-cost gap; the current implementation must not be described as a guaranteed global
-minimum-cost packer.
+Use this sequence to build the application, observe its behaviour and explain the
+design. The [requirements review](requirements-review.md) records acceptance
+evidence, including minimum-count packing and the complete certification path.
 
 ## 1. Build with Java 21
 
@@ -79,10 +78,10 @@ Explain the capacity rule with two transactions: a GBP 500,000 credit and a
 GBP 500,000 debit leave a net balance change of zero but fill GBP 1,000,000 of
 audit capacity. Credits do not cancel debits for packing.
 
-A true optimality flag means the batch count reaches a valid lower bound. A false
-flag means the current result is unproven; it can represent either a suboptimal
-packing or a weak bound. The [cost-minimisation review](requirements-review.md#cost-minimisation-status)
-shows the repaired 500-to-499 and 490-to-489 cases and the remaining search limits.
+A successful default submission has `optimality proven: true`. This means its
+batch count has either reached a mathematical lower bound or been established
+by complete exact search. The reported bound is tightened to the proven minimum
+when search rules out smaller counts.
 
 ## 4. Show a deterministic starting balance
 
@@ -116,9 +115,11 @@ All packages below sit under `com.example.financial_account_balance_tracker`.
 | `service.impl.InMemoryTransactionAuditService` | Collects disjoint complete windows and clears a partial window only after successful hand-off. |
 | `audit.AsyncAuditDispatcher` | Uses a bounded queue to move downstream work outside the account lock. It retains failed work in memory and rejects new complete windows. |
 | `service.impl.BestFitDecreasingAuditBatchingService` | Sorts magnitudes largest first; a capacity-indexed tree finds the tightest existing fit. A deque preserves batches with equal remaining capacity. |
-| `service.impl.OptimizingAuditBatchingService` | Keeps an already proven initial result, solves small submissions exactly and attempts bounded local repair on larger submissions. |
+| `service.impl.OptimizingAuditBatchingService` | Coordinates fast packing, local improvements and complete minimum-count certification. |
 | `service.impl.SmallSetExactBatchPacker` | Reconstructs an exact packing for at most 18 transactions using subset states and parent choices. |
 | `service.impl.BoundedBatchRepacker` | Tries a one-batch reduction for up to 128 individual transactions, using backtracking with equal-load symmetry pruning and a fixed node budget. |
+| `service.impl.ExactAuditBatchPacker` | Uses volume/cardinality bounds and complete iterative assignment search to establish the minimum. |
+| `service.impl.LookaheadAuditBatchPacker` | Builds a deterministic pair-lookahead candidate before complete certification. |
 | `model.AuditBatch` and `model.AuditBatchingResult` | Retain immutable assignments, validate capacity and expose the lower-bound result. |
 | `audit.JsonAuditSubmissionHandler` and audit DTOs | Map batches to the output shape and serialize one JSON document per submission. |
 
@@ -132,13 +133,12 @@ Keep these explanations precise:
   another. Default scope gives one account service per application context.
 - **Hand-off:** queue `offer` does not wait for downstream work. Snapshot copying
   still costs O(N) at the window boundary while the account operation is active.
-- **Packing:** all mutable packing state is local to one call. Sorting and the
-  balanced tree give O(N log N) time and O(N) additional space for the initial
-  stage. Repair uses exact subsets for at most 18 items or bounded backtracking
-  for up to 128, with a 100,000-node budget per attempt and two local passes.
-  An exhausted search retains the existing valid packing. A local solution does
-  not prove a global optimum; larger windows remain heuristic when the global
-  lower bound is not reached.
+- **Packing:** integer-penny arithmetic enforces capacities. Best-fit decreasing
+  gives an O(N log N) initial solution; small exact solutions, local repair and pair lookahead
+  improve it. The complete stage tests candidate counts from a valid lower bound
+  upward, pruning only mathematically excluded assignments. Its explicit arrays
+  avoid transaction-depth recursion. Every successful result is minimum-count;
+  exact search has exponential worst-case time and O(N + B) search state.
 - **Failure:** a full queue rejects the completing transaction before the balance
   commit. A handler failure retains work in memory, with no automatic retry or
   durable recovery.

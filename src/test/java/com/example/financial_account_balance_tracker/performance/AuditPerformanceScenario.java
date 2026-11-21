@@ -147,6 +147,7 @@ class AuditPerformanceScenario {
     }
 
     private static void validatePacking(AuditSubmission input, AuditBatchingResult result) {
+        assertThat(result.optimalityProven()).as("Default packing must establish its exact minimum").isTrue();
         HashMap<Transaction, Integer> remaining = new HashMap<>();
         input.transactions().forEach(transaction -> remaining.merge(transaction, 1, Integer::sum));
         long packedPence = 0;

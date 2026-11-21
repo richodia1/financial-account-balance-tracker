@@ -1,183 +1,107 @@
 # Requirements Review
 
-Review date: 17 November 2026. Initial review baseline: `00509fc`. Updated here
-for exact small-set solving, bounded backtracking and the associated checks.
-Exception handling was subsequently verified on 18 November 2026.
+Review date: 21 November 2026.
 
-The main processing, balance-enquiry and audit-output paths are implemented and
-tested. **A guaranteed minimum batch count remains an open requirement.** The
-default service repairs both documented 1,000-item cost gaps, but its bounded
-search cannot guarantee a minimum for every possible input. Passing the test suite does not
-establish full compliance with a strict minimum-cost requirement.
+The application implements concurrent transaction generation, exact account
+balance tracking, REST balance enquiries and minimum-count audit batching.
+The default packing service establishes the exact minimum before returning a
+packing. This review records the implementation and its acceptance evidence.
 
-## Behavior and evidence
+## Requirement coverage
 
-Paths below are relative to `src/main/java/com/example/financial_account_balance_tracker`
-or the matching package beneath `src/test/java`.
-
-| Required behavior | Status | Implementation and evidence |
+| Required behaviour | Status | Evidence |
 | --- | --- | --- |
-| Java and Maven application | Verified | Java 21, Maven Wrapper, managed dependencies in `pom.xml`; clean verification produces an executable JAR. |
-| Credible library choices | Documented | The README explains the framework and test dependencies, managed versions and primary documentation. |
-| Signed `Transaction` with random ID | Verified | `model.Transaction` and `producer.RandomTransactionFactory`; model and generator tests cover identity, signs and validation. |
-| Random magnitude GBP 200 to GBP 500,000 inclusive | Verified | Generator uses whole pennies with an inclusive upper boundary; deterministic generator tests exercise both endpoints. |
-| Separate dedicated credit and debit threads | Verified | `producer.TransactionProducer` owns one scheduled executor per type; tests observe both real thread names. |
-| Target 25 credits and 25 debits per second | Verified as scheduling policy | Each executor uses a 40 ms fixed-rate period. Tests verify scheduling arguments. Operating-system pauses or slow processing can change observed wall-clock delivery. |
-| One shared account instance | Verified | Default service scope provides one account service per application context. There is no account identifier or per-request account instance. |
-| Required balance-service interface | Verified | `service.BankAccountService` retains `processTransaction(Transaction)` and `double retrieveBalance()`, with an exact decimal accessor added. |
-| Accurate calculations and concurrent enquiries | Verified | Exact decimal arithmetic and one synchronized account monitor; tests include pennies, negative balances, stable snapshots and 8,000 concurrent updates. |
-| REST balance enquiry | Verified | `controller.BalanceController`: `GET /api/balance`, JSON numeric amount, GBP currency and `Cache-Control: no-store`. Real-server tests cover successful and unsupported requests. |
-| Typed failures and consistent HTTP errors | Verified | Domain/operational exceptions, safe problem responses, preserved 404/405/406 headers, server error identifiers and retained background causes. See the error-handling guide. |
-| Exactly 1,000 transactions per default submission | Verified | Collector and dispatcher enforce complete windows; tests cover 999, 1,000, 1,001, multiple windows and shutdown with an incomplete window. |
-| One or more nonempty batches per submission | Verified | Packing retains actual transaction assignments in immutable batches; preservation tests cover repeated occurrences and large windows. |
-| Absolute value per batch at most GBP 1,000,000 | Verified | Integer-penny placement plus independent model validation. Opposite signs consume capacity; tests cover an exact fit and one penny over. |
-| Minimum number of batches | Known gaps repaired; global guarantee open | Exact small-set solving and bounded local search fix both documented default-window counterexamples. Search limits can still leave opportunities unexplored. |
-| Console submission summary | Verified | `audit.JsonAuditSubmissionHandler` prints one valid JSON line per complete submission, with numeric totals in pounds and transaction counts. Contract tests parse the document. |
-| Demonstrate scaling to 100,000 transactions | Demonstrated locally | Functional tests and the opt-in performance scenario cover 100,000-item windows, including actual account-to-JSON processing. The performance report defines exclusions and measurement limits. |
-| Generic domain content | Checked | Domain code and project prose use generic account concepts and contain no actual customer, employer or individual names. Standard dependency names and upstream notices remain intact. |
-| Public source availability | Checked on review date | Repository metadata was readable without credentials and reported public visibility. This is an external property, not an application guarantee. |
+| Java and Maven application | Verified | Java 21, Maven Wrapper, managed framework dependencies and an executable application JAR. |
+| Credible library choices | Documented | README dependency assessment and primary documentation; packing uses the Java standard library. |
+| Random transaction ID and signed amount | Verified | Immutable `Transaction`, UUID generation and whole-pence random magnitudes. |
+| Magnitudes GBP 200 to GBP 500,000 inclusive | Verified | Factory boundary tests cover both endpoints for credits and debits. |
+| Separate credit and debit threads | Verified | Dedicated named single-thread scheduled executors; real-worker tests observe both names. |
+| Target 25 credits and 25 debits per second | Verified | Both tasks use 40 ms fixed-rate scheduling. Actual delivery follows execution and operating-system scheduling. |
+| One shared account-service instance | Verified | Default singleton service scope and constructor injection into producers and controller. |
+| Required service interface | Verified | `processTransaction(Transaction)` and `double retrieveBalance()` retained; exact decimal accessor added. |
+| Accurate, concurrent balance calculations | Verified | Exact decimal accumulation, synchronized reads/updates, penny scenarios and 8,000 concurrent updates. |
+| REST balance enquiry | Verified | `GET /api/balance`, numeric GBP balance and no-store headers; real-server contract tests. |
+| Exactly 1,000 transactions per default submission | Verified | Complete-window collector, immutable snapshots, boundary/concurrency tests and configured pipeline checks. |
+| One or more nonempty batches per submission | Verified | Immutable batches retain the actual transaction occurrences and independently validate capacity. |
+| Absolute batch value at most GBP 1,000,000 | Verified | Whole-pence placement, independent model validation and exact-capacity/one-penny-over tests. |
+| Minimum batch count | Verified | Valid lower bounds or complete iterative feasibility search establish the minimum; independent oracle comparisons and full-window infeasibility regressions. |
+| Console submission summary | Verified | One JSON document per completed submission with numeric totals and transaction counts. |
+| Scaling to 100,000 transactions | Demonstrated | Functional occurrence-preservation checks and the reproducible packing/account-to-JSON performance scenario. |
+| Generic domain content | Checked | Application examples and domain documentation use fictitious account data. Standard dependency names and upstream references identify the libraries used. |
+| Public source repository | Checked | Public repository with Maven source, tests, setup instructions and supporting design/performance documentation. |
 
-## Cost-minimisation status
+Swagger UI, typed failures and consistent HTTP problem responses are also
+implemented and covered by real-server and domain tests.
 
-The production service is `OptimizingAuditBatchingService`, which starts with
-best-fit decreasing and attempts bounded exact repair. Consider a
-1,000-transaction submission containing:
+## Minimum-count argument
 
-- 994 transactions of magnitude GBP 500,000.
-- Six transactions of magnitudes GBP 440,000, GBP 250,000, GBP 200,000,
-  GBP 390,000, GBP 340,000 and GBP 270,000.
+The initial packing is a feasible upper bound. Exact integer arithmetic supplies
+a volume lower bound. Sorted-prefix cardinality bounds additionally account for
+how many large items can share a batch. Matching either bound proves optimality.
 
-All magnitudes are inside the normal generation range. Credit and debit signs
-can alternate because audit capacity counts magnitudes.
+Small submissions can be solved completely by subset dynamic programming.
+Larger submissions use local improvement and deterministic pair lookahead to
+obtain a better feasible candidate. These steps do not decide that a candidate
+is minimal merely because improvement stops.
 
-The first 994 transactions fill 497 batches. The remaining six can be packed into
-two batches with totals GBP 980,000 and GBP 910,000. That gives **499 batches**,
-which reaches the total-volume lower bound and therefore proves the minimum.
+When necessary, `ExactAuditBatchPacker` tests candidate counts from the valid
+lower bound upward. Its iterative traversal considers every non-equivalent
+feasible assignment, pruning only interchangeable equal-load bins, previously
+proved-infeasible states and capacity violations. Residual space smaller than
+the smallest remaining item supplies an additional valid infeasibility test.
+The first feasible count is minimal. If every count below the incumbent is
+infeasible, the incumbent is minimal.
 
-Best-fit decreasing alone placed the six remainder transactions into three
-batches, producing **500 batches** overall. The default service now solves that
-six-item repair exactly, producing **499 batches** and proving the minimum.
+The cache retains only proved-infeasible states. Eviction affects repeated work,
+not search completeness. Explicit interruption raises `AuditProcessingException`
+and the dispatcher retains the submission. A successful default packing returns
+`optimalityProven() == true`.
 
-`AuditPackingQualityTests.repairsTheKnownCostGapInAValidOneThousandTransactionWindow`
-checks the improvement, and a configuration test verifies the 499-batch JSON
-output through the default collection and dispatch pipeline.
+## Acceptance examples
 
-Whole submissions of at most 18 items are solved exactly when the initial bound
-has not already proved optimality. Larger windows get at most two local passes,
-each considering up to six underfilled batches and 128 transactions in total.
-Sets of at most 18 use the exact subset solver; larger selected sets use
-backtracking with a 100,000-node budget and at most five target bins.
-An exact local solution does not tighten the global lower bound by itself.
+- The six-item case GBP 440,000, 250,000, 200,000, 390,000, 340,000 and 270,000
+  fits in two batches. Padding with 994 GBP 500,000 items gives an exact minimum
+  of 499 batches for a complete 1,000-item submission.
+- The extended complete-window case with 974 GBP 500,000 items, those six
+  amounts and 20 GBP 200 items has an exact minimum of 489 batches.
+- A full-window proof case contains 972 GBP 500,000 items, four GBP 450,000
+  items, three GBP 60,000 items and 21 GBP 200 items. Its initial volume and
+  cardinality bounds are 488. In 488 bins, the 976 large items force two per bin.
+  Only the two possible 450,000/450,000 pairs have room for a 60,000 item, so the
+  third such item cannot fit. Complete search proves that 489 bins are required.
+- The seeded uniform 100,000-item submission reaches 24,969 batches, equal to
+  its volume bound. Every original occurrence and exact absolute total is retained.
+- An independent recursive assignment oracle checks production exact feasibility
+  on 80 seeded small inputs, alongside existing known-optimum, subset-solver and
+  bounded-repair comparisons.
+- Direct iterative search handles 100,000 repeated transaction occurrences without
+  transaction-depth recursion. Cancellation tests verify the typed exception and
+  preserved interrupt status.
 
-The second repaired 1,000-item construction is:
+## Validation
 
-- 974 items of magnitude GBP 500,000.
-- The same six remainder amounts listed above.
-- 20 items of magnitude GBP 200.
+Java 21 clean verification passes 154 automated tests with no failures, errors
+or skips. The tests cover model invariants, decimal arithmetic, concurrency,
+producer lifecycle, complete audit windows, bounded asynchronous hand-off,
+minimum-count packing, occurrence preservation, JSON output, HTTP errors and
+OpenAPI/Swagger contracts.
 
-The first 974 items fill 487 batches. The remainder can fit into batches of
-GBP 980,000 and GBP 914,000, giving an exact minimum of **489 batches**. The
-earlier 18-item strategy emitted **490** because an underfilled batch had 21
-transactions. The bounded repacker now finds a valid two-batch remainder
-assignment and reaches **489**, proving optimality by the global volume bound.
-Its 100,000-item version similarly improves from 49,990 to **49,989**.
+The [performance report](performance.md) contains current 1,000- and
+100,000-transaction measurements, input definitions and reproduction commands.
+The [demonstration guide](demonstration-guide.md) provides the build/run sequence,
+and the [design walkthrough](design.md) explains the component boundaries and
+minimum-count proof.
 
-Both outcomes are regression-tested through the default service; default
-collection-to-JSON configuration tests also cover the two 1,000-item cases.
-If the bounded search exhausts its budget, the original valid packing is retained
-and the optimality flag stays conservative. A deterministic test forces this
-fallback and verifies that no transaction occurrence is lost.
+## Runtime model
 
-The seeded random 100,000-item case still has an unproven result: the current
-packing has 24,970 batches against a lower bound of 24,969. No minimum is claimed
-there. The item, group, pass and node limits prevent exhaustive global search.
+State is held in memory for the lifetime of the process. Complete submissions
+are processed on a dedicated audit worker; an incomplete window remains with the
+collector until it fills. Queue rejection occurs before the completing account
+update is committed. A processing failure retains the in-flight and queued
+submissions for inspection, and a partially written console line cannot be
+rolled back. These behaviours are explicit and covered by failure-path tests.
 
-The implementation now reduces the known cost gap without unbounded exponential
-work. An exact global optimizer is still required to guarantee a minimum for
-every arbitrary large input, with runtime and resource costs assessed separately.
-
-## Operational assumptions
-
-- All balances, partial windows, queued windows and failed work are in memory.
-  Restarting resets them; there is no durable recovery.
-- An incomplete window is retained until it fills and is not emitted at shutdown.
-- A full audit queue rejects the completing transaction before committing its
-  balance change. The existing partial window remains intact. Producer processing
-  failures stop both generators.
-- A failed audit handler retains its in-flight and queued windows in memory.
-  New complete windows are rejected. There is no automatic downstream retry;
-  subsequent transactions can enter a partial window before it next fills.
-- Console delivery has no remote acknowledgement or rollback. A partial write
-  cannot be undone; write errors stop the audit worker.
-- Negative balances are allowed. Repeated IDs are processed as repeated calls,
-  rather than used as deduplication keys.
-- The generic model accepts nonzero whole-pence amounts outside the generator's
-  range. An individual magnitude above the batch capacity fails later packing;
-  normal generated transactions cannot trigger that case.
-- The 100,000-item timing demonstration excludes rate-limited generation, HTTP
-  traffic, terminal output of the JSON payload and sustained queue pressure.
-
-These are visible design limits. They should not be presented as durability,
-delivery, real-time scheduling or global-optimization guarantees.
-
-## Validation record
-
-The initial review exposed the original cost gap. Validation after adding exact
-small-set solving and bounded backtracking:
-
-- Java 21 clean verification and follow-up verification completed successfully:
-  127 tests, no failures,
-  errors or skips, and an executable JAR produced.
-- Default configured pipeline regressions produced 499 and 489 batches for the
-  two repaired 1,000-item cases, preserving each complete submission count.
-- The rebuilt packaged JAR ran with normal producer and audit settings on a
-  random local port. Its observed JSON submission contained exactly 1,000
-  transactions in 255 batches, all within the absolute-value limit. The balance
-  API returned HTTP 200 with GBP currency, and the owned process shut down cleanly.
-  Random generation makes that observed batch count illustrative, not repeatable.
-- All ten opt-in performance scenarios completed with a 512 MiB maximum heap,
-  including repaired cases at 1,000 and 100,000 transactions. Current CSV results
-  match the generated measurement artifacts.
-- Real-server regression tests cover JSON balance responses, exact decimal
-  values, no-store headers, read-only behavior, POST 405 and HTML-only Accept 406.
-  Initial-review packaged checks additionally verified root 404, a fresh balance
-  of GBP 0.00 with producers disabled, and no incomplete submission on shutdown.
-- Local documentation links and whitespace checks passed; the domain/prose
-  content scan found no identifying customer or individual references.
-
-Performance was remeasured using the actual default service; earlier CSV results
-remain available for context. See the [performance report](performance.md) and
-[demonstration guide](demonstration-guide.md).
-
-## Exception-handling validation: 18 November 2026
-
-- Java 21 clean verification passed 143 tests with no failures, errors or skips.
-- HTTP advice tests cover typed validation, audit unavailability, internal audit
-  errors and unexpected bugs. Server responses hide internal messages and causes,
-  provide correlation identifiers, and omit query parameters from the instance.
-- Real-server tests verify 404, 405 and 406 problem bodies, no-store headers and
-  the preserved Allow header. Packaged application checks verified those contracts
-  alongside a successful balance GET and a complete 1,000-item audit submission.
-- Model and audit tests verify custom exception types, preserved causes, unchanged
-  balance/partial-window state on rejection, failure retention and serialization
-  failure before any output is written.
-- The existing packing algorithm and limits are unchanged. Timing CSVs remain the
-  measurements recorded before this error-contract change.
-
-See the [error-handling guide](error-handling.md) for the exception categories,
-HTTP mappings and local failure-path commands.
-
-## API-documentation validation: 19 November 2026
-
-- Added springdoc OpenAPI 3.1 generation and Swagger UI for the balance enquiry.
-  Documentation identifies the GBP balance as a number and describes the actual
-  read-only operation and its problem responses.
-- Java 21 verification passed 145 tests with no failures, errors or skips.
-  Real-server tests cover the generated specification, unchanged account state,
-  UI redirect/assets and local specification configuration.
-- The rebuilt executable JAR served Swagger UI, OpenAPI JSON and the balance
-  endpoint on an available test port. Its balance returned GBP 0.00 with producers
-  disabled, POST retained its 405 problem response, and the owned process stopped
-  cleanly. An existing IDE process was left running for the user to restart.
-- This documentation addition does not change the packing algorithm or the
-  minimum-batch-count limits recorded above.
+Exact search has exponential worst-case computational cost. Its traversal uses
+O(N + B) arrays and a separately budgeted memo cache; it runs outside the account
+monitor. The performance report measures the specified local workloads, including
+all correctness and minimum-count checks, and identifies what each timing includes.
